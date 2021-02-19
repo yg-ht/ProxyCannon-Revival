@@ -8,8 +8,7 @@ The below is the text from the original blog posts.
 
 ------------ 
 
-September 26, 2015
-==================
+### September 26, 2015
 
 This is an update to an older post that can be found here.  Since createProxy's initial release, we've received some great feedback and, as a result, we made some improvements.   There were several shortcomings with the previous version, all of which rested on the use of ProxyChains.  ProxyChains is old, outdated, and failed to support  protocols such as  UDP or ICMP or Java apps (i.e. Burp).  So it was re-written, code can be found: https://github.com/Shellntel/scripts/blob/master/proxyCannon.py
 
@@ -36,8 +35,7 @@ That it!  Browsers, pentesting tools, whatever, should all work seamlessly.  To 
 Any questions, comment or bugs, please feel free to submit them to github.  Thanks!
 
 
-May 24, 2016
-=============
+### May 24, 2016
 
 ProxyCannon, which can be found here, has undergone some revisions since our initial release and as a result, there's some new features we'd like to introduce.
 Cleaner User Interface.  
