@@ -1,6 +1,16 @@
 # ProxyCannon
 This repo is a fork of a single script by Shellntel in their repo "scripts".  Separated here for ease of code management and to be able to collect updates etc from the community.
 
+## Install
+
+### Debian-based systems
+
+```apt install boto```
+
+### For those who prefer Pip
+
+```pip install -U boto```
+
 
 ## Original announcements
 
