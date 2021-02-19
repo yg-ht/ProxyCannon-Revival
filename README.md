@@ -1,6 +1,9 @@
 # ProxyCannon
 This repo is a fork of a single script by Shellntel in their repo "scripts".  Separated here for ease of code management and to be able to collect updates etc from the community.
 
+
+## Original announcements
+
 The below is the text from the original blog posts.
 
 ------------ 
