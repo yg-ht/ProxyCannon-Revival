@@ -63,10 +63,11 @@ def runsystemcommand(description, islocal, cmd):
         if confirm.lower() != "y":
             warning("Run clean up? (y/n)")
             confirm = input()
-            if confirm.lower() != "y":
-                cleanup()
+            if confirm.lower() != "n":
+                exit("Not cleaning, shutting down")
             else:
-                exit("Shutting down")
+                cleanup()
+                exit("Cleaning complete, shutting down")
     else:
         success("Success: %s" % description)
 
@@ -90,7 +91,6 @@ def log(msg):
 def cleanup():
     # Time to clean up
     print("\n")
-    success("Roger that! Shutting down...")
 
     if args.v:
         print('In debug mode. Press enter to continue.')
@@ -127,12 +127,11 @@ def cleanup():
     # Cleaning routes
     success("Correcting Routes.....")
     for host in all_instances:
-        runsystemcommand("Delete route %s dev %s" % (host, args.interface), True, localcmdsudoprefix + "route del %s "
-                                                                                                       "dev %s" % (
-                             host, args.interface))
+        runsystemcommand("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
+                         "route del %s dev %s" % (host, networkInterface))
     runsystemcommand("Delete the default route", True, localcmdsudoprefix + "ip route del default")
     runsystemcommand("Adding default route", True, localcmdsudoprefix + "ip route add default via %s dev %s" %
-                     (defaultgateway, args.interface))
+                     (defaultgateway, networkInterface))
 
     # Terminate instance
     success("Terminating Instances.....")
@@ -409,7 +408,7 @@ def rotate_hosts():
 
                 # Add static routes for our SSH tunnels
                 runsystemcommand("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
-                                 "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, args.interface))
+                                 "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, networkInterface))
 
                 # Establish tunnel interface
                 sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
@@ -479,8 +478,8 @@ def rotate_hosts():
 
                 # Add static routes for our SSH tunnels
                 runsystemcommand("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
-                                 "ip route add %s via %s dev %s > /dev/null 2>&1" % (swapped_ip, defaultgateway,
-                                                                                     args.interface))
+                                 "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway,
+                                                                                     networkInterface))
 
                 # Removing from local dict
                 address_to_tunnel[str(swapped_ip)] = address_to_tunnel[str(host)]
@@ -715,7 +714,7 @@ except Exception as e:
     error("There may be config in your AWS console to tidy up but no local changes were made")
     exit()
 
-warning("Starting %s instances, please give about 4 minutes for them to fully boot" % args.num_of_instances)
+warning("Starting %s instances, waiting about 4 minutes for them to fully boot" % args.num_of_instances)
 
 # sleep for 4 minutes while booting images
 for i in range(21):
@@ -765,16 +764,9 @@ for host in allInstances:
     runsystemcommand("Restarting Service to take new config on %s" % host, False, sshbasecmd + "'sudo service ssh "
                                                                                                "restart'")
 
-    # Establish tunnel interface
-    runsystemcommand("Starting tunnel to %s via %s" % (host, interface), False,
-                     "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o "
-                     "ServerAliveInterval=50 root@%s &" % (homeDir, keyName, interface, interface, host))
-
-    # Provision interface
-    runsystemcommand("Provisioning tun%s interface on %s" % (interface, host), False, sshbasecmd + "'sudo ip tuntap "
-                                                                                                   "add dev tun%s "
-                                                                                                   "mode tun'" %
-                     interface)
+# Provision interface
+    runsystemcommand("Provisioning tun%s interface on %s" % (interface, host), False, sshbasecmd +
+                     "'sudo ip tuntap add dev tun%s mode tun'" % interface)
 
     # Configure interface
     runsystemcommand("Configuring tun%s interface on %s" % (interface, host), False, sshbasecmd +
@@ -793,9 +785,8 @@ for host in allInstances:
                      % (interface, interface))
 
     # Create tun interface
-    runsystemcommand("Creating local interface tun%s" % str(interface), True, localcmdsudoprefix + "ip tuntap add dev "
-                                                                                                   "tun%s mode tun" %
-                     str(interface))
+    runsystemcommand("Creating local interface tun%s" % str(interface), True, localcmdsudoprefix +
+                     "ip tuntap add dev tun%s mode tun" % str(interface))
 
     # Turn up our interface
     runsystemcommand("Turning up interface tun%s" % str(interface), True, localcmdsudoprefix +
@@ -805,6 +796,27 @@ for host in allInstances:
     runsystemcommand("Assigning interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2", True,
                      localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
     time.sleep(2)
+
+    # Establish tunnel interface
+    #    runsystemcommand("Starting tunnel to %s via %s" % (host, interface), False,
+    #                     "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o "
+    #                     "ServerAliveInterval=50 root@%s &" % (homeDir, keyName, interface, interface, host))
+    sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50 root@%s &" % \
+             (homeDir, keyName, interface, interface, host)
+    debug("SHELL CMD (remote): " + sshcmd)
+    retry_cnt = 0
+    retcode = None
+    while ((retcode != 0) or (retry_cnt < 6)):
+        retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
+        if retcode:
+            warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
+            retry_cnt = retry_cnt + 1
+            time.sleep(1)
+        else:
+            break
+        if retry_cnt == 5:
+            error("Giving up...")
+            cleanup()
 
     # increment for the next lop iteration
     interface = interface + 1
@@ -842,12 +854,12 @@ runsystemcommand("Allowing local connections to RFC1918 (3 of 3)", True, localcm
                  "iptables -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
 
 # Allow RFC 1918 routes (1 of 3)
-runsystemcommand("Allowing RFC 1918 routes (1 of 3)", True, localcmdsudoprefix +
-                 "ip route add 192.168.0.0/16 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface))
-runsystemcommand("Allowing RFC 1918 routes (2 of 3)", True, localcmdsudoprefix +
-                 "ip route add 172.16.0.0/16 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface))
-runsystemcommand("Allowing RFC 1918 routes (3 of 3)", True, localcmdsudoprefix +
-                 "ip route add 10.0.0.0/8 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface))
+#runsystemcommand("Allowing RFC 1918 routes (1 of 3)", True, localcmdsudoprefix +
+#                 "ip route add 192.168.0.0/16 via %s dev %s" % (defaultgateway, networkInterface))
+#runsystemcommand("Allowing RFC 1918 routes (2 of 3)", True, localcmdsudoprefix +
+#                 "ip route add 172.16.0.0/16 via %s dev %s" % (defaultgateway, networkInterface))
+#runsystemcommand("Allowing RFC 1918 routes (3 of 3)", True, localcmdsudoprefix +
+#                 "ip route add 10.0.0.0/8 via %s dev %s" % (defaultgateway, networkInterface))
 
 count = args.num_of_instances
 interface = 1
@@ -867,7 +879,7 @@ for host in allInstances:
 
     # Add static routes for our SSH tunnels
     runsystemcommand("Adding static routes for our SSH tunnels", True, localcmdsudoprefix +
-                     "ip route add %s via %s dev %s" % (host, defaultgateway, args.interface))
+                     "ip route add %s via %s dev %s" % (host, defaultgateway, networkInterface))
 
     interface = interface + 1
     count = count - 1
