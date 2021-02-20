@@ -758,20 +758,20 @@ success("Provisioning Hosts.....")
 for host in allInstances:
 
     log(host)
+    sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (homeDir, keyName, host)
 
     # Check connectivity and add the host to known_hosts file
-    sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'id'" % (homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("Checking connectivity via SSH with %s" % host)
+    sshcmd = sshbasecmd + "'id'"
+    debug("SHELL CMD (remote): " + sshcmd)
     retcode = run(sshcmd, shell=True, capture_output=True, text=True)
 
     # Enable Tunneling on the remote host
-    sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'" % (
-        homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
-
+    debug("Enabling tunneling via SSH on %s" % host)
+    sshcmd = sshbasecmd + "'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'"
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    retcode = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to configure remote sshd_config on  %s to allow tunneling. Retrying..." % host)
@@ -785,11 +785,11 @@ for host in allInstances:
             cleanup("foo", "bar")
 
     # Permit Root Logon
-    sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo sed -i \"s/PermitRootLogin without-password/PermitRootLogin yes/\" /etc/ssh/sshd_config'" % (
-        homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("Permitting root user logon on %s" % host)
+    sshcmd = sshbasecmd + "'sudo sed -i \"s/PermitRootLogin without-password/PermitRootLogin yes/\" /etc/ssh/sshd_config'"
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to configure remote sshd_config on %s to allow SSH Keys as root. Retrying..." % host)
@@ -803,11 +803,11 @@ for host in allInstances:
             cleanup("foo", "bar")
 
     # Copy Keys
-    sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo cp /home/ubuntu/.ssh/authorized_keys /root/.ssh/'" % (
-        homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("Copying ssh keys to from normal user to root user on %s" % host)
+    sshcmd = sshbasecmd + "'sudo cp /home/ubuntu/.ssh/authorized_keys /root/.ssh/'"
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("ERROR: Failed to set authorized ssh keys on %s. Retrying..." % host)
@@ -821,11 +821,11 @@ for host in allInstances:
             cleanup("foo", "bar")
 
     # Restarting Service to take new config (you'd think a simple reload would be enough)
-    sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo service ssh restart'" % (
-        homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("Restarting Service to take new config on %s" % host)
+    sshcmd = sshbasecmd + "'sudo service ssh restart'"
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("ERROR: Failed to restart sshd service on %s. Retrying..." % host)
@@ -839,11 +839,12 @@ for host in allInstances:
             cleanup("foo", "bar")
 
     # Establish tunnel interface
+    debug("Starting tunnel to %s via %s" % (host, interface))
     sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50 root@%s &" % (
         homeDir, keyName, interface, interface, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
@@ -859,9 +860,9 @@ for host in allInstances:
     # Provision interface
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo ip tuntap add mode tun'" % (
         homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to provision remote interface on %s. Retrying..." % host)
@@ -877,9 +878,9 @@ for host in allInstances:
     # Configure interface
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (
         homeDir, keyName, host, interface, interface)
-    debug("SHELL CMD: " + sshcmd)
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to configure remote interface on %s. Retrying..." % host)
@@ -895,9 +896,9 @@ for host in allInstances:
     # Enable forwarding on remote host
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo su root -c \"echo 1 > /proc/sys/net/ipv4/ip_forward\"'" % (
         homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to enable forwarding on %s. Retrying..." % host)
@@ -913,9 +914,9 @@ for host in allInstances:
     # Provision iptables on remote host
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE'" % (
         homeDir, keyName, host)
-    debug("SHELL CMD: " + sshcmd)
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to provision iptables on %s. Retrying..." % host)
@@ -931,12 +932,13 @@ for host in allInstances:
     # Add return route back to us
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo route add 10.%s.254.2 dev tun%s'" % (
         homeDir, keyName, host, interface, interface)
-    debug("SHELL CMD: " + sshcmd)
+    debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    while ((retcode == 1) or (retry_cnt < 6)):
+    while ((retcode.returncode == 1) or (retry_cnt < 6)):
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to provision static route  on %s. Retrying..." % host)
+            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -946,20 +948,33 @@ for host in allInstances:
             cleanup("foo", "bar")
 
     # Turn up our interface
-    os.system("ifconfig tun%s up" % interface)
     debug("Turning up interface tun" + str(interface))
+    localcmd = "ifconfig tun%s up" % interface
+    debug('SHELL CMD (local): ' + localcmd)
+    retcode = run(localcmd, shell=True, capture_output=True, text=True)
+    if retcode.returncode != 0:
+        error("Failed to turn up interface")
+        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
 
     # Provision interface
-    os.system("ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
-    debug("Assinging interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2")
+    debug("Assigning interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2")
+    localcmd("ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
+    debug('SHELL CMD (local): ' + localcmd)
+    retcode = run(localcmd, shell=True, capture_output=True, text=True)
+    if retcode.returncode != 0:
+        error("Failed to assign ip address to interface")
+        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
     time.sleep(2)
 
     # Adding local route (shoudlnt be needed)
     debug("Adding static route 10." + str(interface) + ".254.0/30 via dev tun" + str(interface))
-    route_cmd = 'ip route add 10.' + str(interface) + '.254.0/30 via 0.0.0.0 dev tun' + str(
+    localcmd = 'ip route add 10.' + str(interface) + '.254.0/30 via 0.0.0.0 dev tun' + str(
         interface) + ' proto kernel scope link src 10.' + str(interface) + '.254.2'
-    debug('SHELL CMD: ' + route_cmd)
-    os.system(route_cmd)
+    debug('SHELL CMD (local): ' + localcmd)
+    retcode = run(localcmd, shell=True, capture_output=True, text=True)
+    if retcode.returncode != 0:
+        error("Failed to add static route")
+        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
 
     interface = interface + 1
 
@@ -967,19 +982,59 @@ for host in allInstances:
     address_to_tunnel[str(host)] = str(interface - 1)
 
 # setup local forwarding
-os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
-debug("SHELL CMD: ehco 1 > /proc/sys/net/ipv4/ip_forward")
+debug("Enabling local ip forwarding")
+localcmd = "echo 1 > /proc/sys/net/ipv4/ip_forward"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to enable local ip forwarding")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
 
 # Save iptables
-success("Saving existing iptables state")
-os.system("/sbin/iptables-save > /tmp/%s" % iptablesName)
+debug("Saving the current local IP tables state")
+localcmd = "/sbin/iptables-save > /tmp/%s" % iptablesName
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to save existing local iptables state")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Saved existing iptables state")
 
 # Create iptables rule
-# Flush existing rules
-success("Building new iptables...")
-os.system("iptables -t nat -F")
-os.system("iptables -t mangle -F")
-os.system("iptables -F")
+
+# Flush existing rules (1 of 3)
+debug("Flushing existing local iptables nat rules")
+localcmd = "iptables -t nat -F"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to flush existing local iptables nat state")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Flushed local iptables nat state")
+
+# Flush existing rules (2 of 3)
+debug("Flushing existing local iptables mangle rules")
+localcmd = "iptables -t mangle -F"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to flush existing local iptables mangle state")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Flushed local iptables mangle state")
+
+# Flush existing rules (3 of 3)
+debug("Flushing all remaining local iptables rules")
+localcmd = "iptables -F"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to flush all remaining local iptables state")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Flushed all remaining local iptables state")
 
 count = args.num_of_instances
 interface = 1;
