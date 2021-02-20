@@ -88,13 +88,9 @@ def log(msg):
 #############################################################################################
 # Handle SigTerm & Clean up
 #############################################################################################
-def cleanup():
+def cleanup(proxy=None, cannon=None):
     # Time to clean up
     print("\n")
-
-    if args.v:
-        print('In debug mode. Press enter to continue.')
-        null = input()
 
     # Connect to EC2 and return list of reservations
     cleanup_conn = None
@@ -479,7 +475,7 @@ def rotate_hosts():
                 # Add static routes for our SSH tunnels
                 runsystemcommand("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
                                  "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway,
-                                                                                     networkInterface))
+                                                                    networkInterface))
 
                 # Removing from local dict
                 address_to_tunnel[str(swapped_ip)] = address_to_tunnel[str(host)]
@@ -764,7 +760,7 @@ for host in allInstances:
     runsystemcommand("Restarting Service to take new config on %s" % host, False, sshbasecmd + "'sudo service ssh "
                                                                                                "restart'")
 
-# Provision interface
+    # Provision interface
     runsystemcommand("Provisioning tun%s interface on %s" % (interface, host), False, sshbasecmd +
                      "'sudo ip tuntap add dev tun%s mode tun'" % interface)
 
@@ -798,10 +794,8 @@ for host in allInstances:
     time.sleep(2)
 
     # Establish tunnel interface
-    #    runsystemcommand("Starting tunnel to %s via %s" % (host, interface), False,
-    #                     "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o "
-    #                     "ServerAliveInterval=50 root@%s &" % (homeDir, keyName, interface, interface, host))
-    sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50 root@%s &" % \
+    sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
+             "ServerAliveInterval=50 root@%s &" % \
              (homeDir, keyName, interface, interface, host)
     debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
@@ -852,14 +846,6 @@ runsystemcommand("Allowing local connections to RFC1918 (2 of 3)", True, localcm
 # Allow local connections to RFC1918 (3 of 3)
 runsystemcommand("Allowing local connections to RFC1918 (3 of 3)", True, localcmdsudoprefix +
                  "iptables -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
-
-# Allow RFC 1918 routes (1 of 3)
-#runsystemcommand("Allowing RFC 1918 routes (1 of 3)", True, localcmdsudoprefix +
-#                 "ip route add 192.168.0.0/16 via %s dev %s" % (defaultgateway, networkInterface))
-#runsystemcommand("Allowing RFC 1918 routes (2 of 3)", True, localcmdsudoprefix +
-#                 "ip route add 172.16.0.0/16 via %s dev %s" % (defaultgateway, networkInterface))
-#runsystemcommand("Allowing RFC 1918 routes (3 of 3)", True, localcmdsudoprefix +
-#                 "ip route add 10.0.0.0/8 via %s dev %s" % (defaultgateway, networkInterface))
 
 count = args.num_of_instances
 interface = 1

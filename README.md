@@ -1,5 +1,16 @@
-# ProxyCannon
+# ProxyCannon-Revival
 This repo is a fork of a single script by Shellntel in their repo "scripts".  Separated here for ease of code management and to be able to collect updates etc from the community.
+
+This project looks to have been abandoned by the original author and is no longer functional on OS's such as Ubuntu 20.04.  For this reason it has been recreated here so that it is useful again.
+
+### Why bother
+
+A customer requirement kicked off a search for tools that created a network of proxies for IPS evasion.  They genuinely wanted me to spend time engineering a way to avoid their "fail2ban" setup...
+
+I looked at several existing projects and most seemed massively complex, for example, require you to have a working terraform install and so on.  I wanted a point and shoot solution: the original Proxy Cannon project seemed to be it.
+
+But the original was buggy and didn't work...  I fell into the trap of "just doing a quick bit of bugfixing" which turned into a couple of days engineering time.  Yes, I probably could have got one of the other projects online, but no, I didn't realise that until I was far too invested in ProxyCannon-Revival.
+
 
 ## Install
 
