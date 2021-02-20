@@ -806,11 +806,6 @@ for host in allInstances:
                      localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
     time.sleep(2)
 
-    # Adding local route (shoudlnt be needed)
-    runsystemcommand("Adding static route 10." + str(interface) + ".254.0/30 via dev tun" + str(interface), True,
-                     localcmdsudoprefix + 'ip route add 10.' + str(interface) + '.254.0/30 via 0.0.0.0 dev tun' +
-                     str(interface) + ' proto kernel scope link src 10.' + str(interface) + '.254.2')
-
     # increment for the next lop iteration
     interface = interface + 1
 
@@ -818,7 +813,8 @@ for host in allInstances:
     address_to_tunnel[str(host)] = str(interface - 1)
 
 # setup local forwarding
-runsystemcommand("Enabling local ip forwarding", True, localcmdsudoprefix + "echo 1 > /proc/sys/net/ipv4/ip_forward")
+runsystemcommand("Enabling local ip forwarding", True, "echo 1 | " + localcmdsudoprefix +
+                 "tee -a /proc/sys/net/ipv4/ip_forward")
 
 # Save iptables
 runsystemcommand("Saving the current local IP tables state", True, localcmdsudoprefix +
