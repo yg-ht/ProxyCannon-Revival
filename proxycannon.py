@@ -522,6 +522,26 @@ def rotate_hosts():
 
 
 #############################################################################################
+# Get Interface IP
+#############################################################################################
+
+def get_ip_address(ifname):
+    ip = netifaces.ifaddresses(ifname)[netifaces.AF_INET][0]['addr']
+    debug(ip)
+    return ip
+
+
+#############################################################################################
+# Get Default Route
+#############################################################################################
+
+def get_default_gateway_linux():
+    gws = netifaces.gateways()
+    gwip = gws['default'][netifaces.AF_INET][0]
+    debug(gwip)
+    return gwip
+
+#############################################################################################
 # System and Program Arguments
 #############################################################################################
 
@@ -636,22 +656,6 @@ else:
     iptablesName = "PC_" + m.hexdigest()
     # Log Name
     logName = "PC_" + m.hexdigest() + ".log"
-
-
-# Get Interface IP
-def get_ip_address(ifname):
-    ip = netifaces.ifaddresses(ifname)[netifaces.AF_INET][0]['addr']
-    debug(ip)
-    return ip
-
-
-# Get Default Route
-def get_default_gateway_linux():
-    gws = netifaces.gateways()
-    gwip = gws['default'][netifaces.AF_INET][0]
-    debug(gwip)
-    return gwip
-
 
 if args.interface != 'detect':
     networkInterface = args.interface
