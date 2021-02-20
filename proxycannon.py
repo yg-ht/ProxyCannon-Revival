@@ -157,7 +157,8 @@ def cleanup(proxy=None, cannon=None):
     subprocess.Popen("rm -f %s/.ssh/%s.pem" % (homeDir, keyName), shell=True)
 
     # Remove local routing
-    runsystemcommand("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 > /proc/sys/net/ipv4/ip_forward")
+    runsystemcommand("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | " + localcmdsudoprefix +
+                 "tee -a /proc/sys/net/ipv4/ip_forward")
 
     # remove iptables saved config
     runsystemcommand("Removing local iptables save state", True, localcmdsudoprefix + "rm -rf  /tmp/%s" + iptablesName)
