@@ -77,6 +77,7 @@ def cleanup(signal, frame):
         null = input()
 
     # Connect to EC2 and return list of reservations
+    cleanup_conn = None
     try:
         success("Connecting to Amazon's EC2...")
         # cleanup_conn = boto.ec2.connect_to_region(region_name=args.region, aws_access_key_id=args.key_id, aws_secret_access_key=args.access_key)
@@ -84,6 +85,7 @@ def cleanup(signal, frame):
                                                   aws_secret_access_key=aws_secret_access_key)
     except Exception as e:
         error("Failed to connect to Amazon EC2 because: %s" % e)
+        exit(2)
 
     cleanup_reservations = cleanup_conn.get_all_instances(
         filters={"tag:Name": nameTag, "instance-state-name": "running"})
@@ -167,7 +169,7 @@ def cleanup(signal, frame):
 
 def rotate_hosts():
     # connect to EC2 and return list of reservations
-
+    rotate_conn = None
     while True:
         retry_cnt = 0
         while retry_cnt < 6:
@@ -185,6 +187,7 @@ def rotate_hosts():
                 time.sleep(+int(retry_cnt))
 
         retry_cnt = 0
+        rotate_reservations = None
         while retry_cnt < 6:
             if retry_cnt == 5:
                 error("giving up...")
@@ -206,6 +209,7 @@ def rotate_hosts():
 
                 # Connect to EC2 and return list of reservations
                 retry_cnt = 0
+                ipfilter_conn = None
                 while retry_cnt < 6:
                     if retry_cnt == 5:
                         error("giving up...")
@@ -221,6 +225,7 @@ def rotate_hosts():
                         time.sleep(+int(retry_cnt))
 
                 retry_cnt = 0
+                ipfilter_reservations = None
                 while retry_cnt < 6:
                     if retry_cnt == 5:
                         error("giving up...")
@@ -283,7 +288,7 @@ def rotate_hosts():
                     p2.stdout.close()
                     p3.stdout.close()
                     p4.stdout.close()
-                    debug("Connection Stats " + stat.strip())
+                    debug("Connection Stats " + str(stat.strip()))
                     if (int(stat) > 0):
                         debug("Connection is in use, sleeping and trying again in .5 seconds")
                         time.sleep(.5)
@@ -340,6 +345,7 @@ def rotate_hosts():
                 # os.system("%s" % nexthopcmd)
 
                 # Requesting new IP allocation
+                new_address = None
                 try:
                     new_address = rotate_conn.allocate_address()
                 except Exception as e:
@@ -372,6 +378,7 @@ def rotate_hosts():
                     cleanup("foo", "bar")
 
                 # Connect to EC2 and return list of reservations
+                ip_list_conn = None
                 try:
                     ip_list_conn = boto.ec2.connect_to_region(region_name=args.region,
                                                               aws_access_key_id=aws_access_key_id,
@@ -410,7 +417,7 @@ def rotate_hosts():
                     if retcode.returncode != 0:
                         warning("Failed to configure sshd_config on %s (tun%s). Retrying..." % (
                             swapped_ip, address_to_tunnel[str(host)]))
-                        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+                        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
                         retry_cnt = retry_cnt + 1
                         time.sleep(1 + int(retry_cnt))
                     else:
@@ -429,7 +436,7 @@ def rotate_hosts():
                     if retcode.returncode != 0:
                         warning("Failed to assign interface address on %s (tun%s). Retrying..." % (
                             swapped_ip, address_to_tunnel[str(host)]))
-                        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+                        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
                         retry_cnt = retry_cnt + 1
                         time.sleep(1 + int(retry_cnt))
                     else:
@@ -449,7 +456,7 @@ def rotate_hosts():
                     if retcode.returncode != 0:
                         warning("ERROR: Failed to add static route on %s (tun%s). Retrying..." % (
                             swapped_ip, address_to_tunnel[str(host)]))
-                        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+                        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
                         retry_cnt = retry_cnt + 1
                         time.sleep(1 + int(retry_cnt))
                     else:
@@ -566,12 +573,14 @@ if not os.path.isfile("/sbin/iptables"):
 # Check args
 if args.num_of_instances < 1:
     error("You need at least 1 instance")
-    exit();
+    exit()
 elif args.num_of_instances > 20:
     warning("Woah there stallion, that's alot of instances, hope you got that sweet license from Amazon.")
 
 # Check for boto config
 boto_config = homeDir + "/.boto"
+aws_secret_access_key = None
+aws_access_key_id = None
 if os.path.isfile(boto_config):
     for line in open(boto_config):
         pattern = re.findall("^aws_access_key_id = (.*)\n", line, re.DOTALL)
@@ -594,7 +603,7 @@ else:
     boto_fh.write('aws_secret_access_key = ')
     boto_fh.write(aws_secret_access_key)
     boto_fh.write("\n")
-    boto_fh.close
+    boto_fh.close()
 
 debug("AWS_ACCESS_KEY_ID: " + aws_access_key_id)
 debug("AWS_SECRET_ACCESS_KEY: " + aws_secret_access_key)
@@ -661,6 +670,7 @@ if networkInterface in netifaces.interfaces():
     debug("Opening logfile: /tmp/" + logName)
     log("Proxy Cannon Started.")
 else:
+    defaultgateway = None
     error("Network interface not found")
     exit()
 
@@ -682,6 +692,7 @@ if confirm.lower() != "y":
 
 # Initialize connection to EC2
 success("Connecting to Amazon's EC2...")
+conn = None
 try:
     conn = boto.ec2.connect_to_region(region_name=args.region, aws_access_key_id=aws_access_key_id,
                                       aws_secret_access_key=aws_secret_access_key)
@@ -701,6 +712,7 @@ keypair.save("%s/.ssh" % homeDir)
 debug("SSH Key Pair Name " + keyName)
 time.sleep(5)
 success("Generating Amazon Security Group...")
+sg = None
 try:
     sg = conn.create_security_group(name=securityGroup, description="Used for proxyCannon")
 except Exception as e:
@@ -717,6 +729,7 @@ except Exception as e:
 debug("Security Group Name: " + securityGroup)
 
 # Launch Amazon Instances
+reservations = None
 try:
     reservations = conn.run_instances(args.image_id, key_name=keyName, min_count=args.num_of_instances,
                                       max_count=args.num_of_instances, instance_type=args.image_type,
@@ -771,7 +784,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to configure remote sshd_config on  %s to allow tunneling. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -789,7 +802,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to configure remote sshd_config on %s to allow SSH Keys as root. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -807,7 +820,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("ERROR: Failed to set authorized ssh keys on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -825,7 +838,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("ERROR: Failed to restart sshd service on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -844,7 +857,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -862,7 +875,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to provision remote interface on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(str(retcode.stdout)) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -880,7 +893,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to configure remote interface on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -898,7 +911,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to enable forwarding on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -916,7 +929,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to provision iptables on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -934,7 +947,7 @@ for host in allInstances:
         retcode = run(sshcmd, shell=True, capture_output=True, text=True)
         if retcode.returncode != 0:
             warning("Failed to provision static route  on %s. Retrying..." % host)
-            debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+            debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
             retry_cnt = retry_cnt + 1
             time.sleep(1)
         else:
@@ -950,7 +963,7 @@ for host in allInstances:
     retcode = run(localcmd, shell=True, capture_output=True, text=True)
     if retcode.returncode != 0:
         error("Failed to turn up interface")
-        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 
     # Provision interface
     debug("Assigning interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2")
@@ -959,7 +972,7 @@ for host in allInstances:
     retcode = run(localcmd, shell=True, capture_output=True, text=True)
     if retcode.returncode != 0:
         error("Failed to assign ip address to interface")
-        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
     time.sleep(2)
 
     # Adding local route (shoudlnt be needed)
@@ -970,7 +983,7 @@ for host in allInstances:
     retcode = run(localcmd, shell=True, capture_output=True, text=True)
     if retcode.returncode != 0:
         error("Failed to add static route")
-        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 
     interface = interface + 1
 
@@ -984,7 +997,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to enable local ip forwarding")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 
 # Save iptables
 debug("Saving the current local IP tables state")
@@ -993,7 +1006,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to save existing local iptables state")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Saved existing iptables state")
 
@@ -1006,7 +1019,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to flush existing local iptables nat state")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Flushed local iptables nat state")
 
@@ -1017,7 +1030,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to flush existing local iptables mangle state")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Flushed local iptables mangle state")
 
@@ -1028,7 +1041,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to flush all remaining local iptables state")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Flushed all remaining local iptables state")
 
@@ -1039,7 +1052,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to allow local connections to RFC1918 (1 of 3)")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Allowed local connections to RFC1918 (1 of 3)")
 
@@ -1050,7 +1063,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to allow local connections to RFC1918 (2 of 3)")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Allowed local connections to RFC1918 (2 of 3)")
 
@@ -1061,7 +1074,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to allow local connections to RFC1918 (3 of 3)")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Allowed local connections to RFC1918 (3 of 3)")
 
@@ -1072,7 +1085,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to allow RFC 1918 routes (1 of 3)")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Allowed RFC 1918 routes (1 of 3)")
 
@@ -1082,7 +1095,7 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to allow RFC 1918 routes (2 of 3)")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Allowed RFC 1918 routes (2 of 3)")
 
@@ -1092,12 +1105,12 @@ debug('SHELL CMD (local): ' + localcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to allow RFC 1918 routes (3 of 3)")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Allowed RFC 1918 routes (3 of 3)")
 
 count = args.num_of_instances
-interface = 1;
+interface = 1
 nexthopcmd = "ip route add default scope global "
 
 for host in allInstances:
@@ -1108,7 +1121,7 @@ for host in allInstances:
     retcode = run(localcmd, shell=True, capture_output=True, text=True)
     if retcode.returncode != 0:
         error("Failed to allow connections to our proxy server %s" % host)
-        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
     else:
         success("Allowed connections to proxy server %s" % host)
 
@@ -1119,7 +1132,7 @@ for host in allInstances:
     retcode = run(localcmd, shell=True, capture_output=True, text=True)
     if retcode.returncode != 0:
         error("Failed to NAT outbound traffic so that it goes through tunnel %s" % host)
-        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
     else:
         success("NAT'ed outbound traffic so that it goes through our tunnel %s" % host)
 
@@ -1135,7 +1148,7 @@ for host in allInstances:
     retcode = run(localcmd, shell=True, capture_output=True, text=True)
     if retcode.returncode != 0:
         error("Failed to add static routes for our SSH tunnel %s" % host)
-        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+        debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
     else:
         success("Added static routes for our SSH tunnel %s" % host)
 
@@ -1149,7 +1162,7 @@ debug("SHELL CMD (local): " + nexthopcmd)
 retcode = run(localcmd, shell=True, capture_output=True, text=True)
 if retcode.returncode != 0:
     error("Failed to Replace default route with the new default route")
-    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    debug("Failed command output is: " + str(retcode.stdout) + " " + str(retcode.stderr))
 else:
     success("Replaced default route with the new default route")
 
