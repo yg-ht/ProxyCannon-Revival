@@ -1036,49 +1036,137 @@ if retcode.returncode != 0:
 else:
     success("Flushed all remaining local iptables state")
 
+# Allow local connections to RFC1918 (1 of 3)
+debug("Allowing local connections to RFC1918 (1 of 3)")
+localcmd = "iptables -t nat -I POSTROUTING -d 192.168.0.0/16 -j RETURN"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to allow local connections to RFC1918 (1 of 3)")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Allowed local connections to RFC1918 (1 of 3)")
+
+# Allow local connections to RFC1918 (2 of 3)
+debug("Allowing local connections to RFC1918 (2 of 3)")
+localcmd = "iptables -t nat -I POSTROUTING -d 172.16.0.0/16 -j RETURN"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to allow local connections to RFC1918 (2 of 3)")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Allowed local connections to RFC1918 (2 of 3)")
+
+# Allow local connections to RFC1918 (3 of 3)
+debug("Allowing local connections to RFC1918 (3 of 3)")
+localcmd = "iptables -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN"
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to allow local connections to RFC1918 (3 of 3)")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Allowed local connections to RFC1918 (3 of 3)")
+
+# Allow RFC 1918 routes (1 of 3)
+debug("Allowing RFC 1918 routes (1 of 3)")
+localcmd = "ip route add 192.168.0.0/16 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface)
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to allow RFC 1918 routes (1 of 3)")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Allowed RFC 1918 routes (1 of 3)")
+
+debug("Allowing RFC 1918 routes (2 of 3)")
+localcmd = "ip route add 172.16.0.0/16 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface)
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to allow RFC 1918 routes (2 of 3)")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Allowed RFC 1918 routes (2 of 3)")
+
+debug("Allowing RFC 1918 routes (3 of 3)")
+localcmd = "ip route add 10.0.0.0/8 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface)
+debug('SHELL CMD (local): ' + localcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to allow RFC 1918 routes (3 of 3)")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Allowed RFC 1918 routes (3 of 3)")
+
 count = args.num_of_instances
 interface = 1;
 nexthopcmd = "ip route add default scope global "
 
-# Allow connections to RFC1918
-os.system("iptables -t nat -I POSTROUTING -d 192.168.0.0/16 -j RETURN")
-os.system("iptables -t nat -I POSTROUTING -d 172.16.0.0/16 -j RETURN")
-os.system("iptables -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
-
 for host in allInstances:
-    # Allow connections to our proxy servers themselves
-    os.system("iptables -t nat -I POSTROUTING -d %s -j RETURN" % host)
-    debug("SHELL CMD: iptables -t nat -I POSTROUTING -d " + host + " -j RETURN")
-    # Nat outbound traffic going through our tunnels
-    os.system("iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " % (interface - 1))
-    debug("SHELL CMD: iptables -t nat -A POSTROUTING -o tun" + str(interface - 1) + " -j MASQUERADE")
+    # Allow connections to our proxy servers
+    debug("Allowing connections to our proxy servers")
+    localcmd = "iptables -t nat -I POSTROUTING -d %s -j RETURN" % host
+    debug('SHELL CMD (local): ' + localcmd)
+    retcode = run(localcmd, shell=True, capture_output=True, text=True)
+    if retcode.returncode != 0:
+        error("Failed to allow connections to our proxy server %s" % host)
+        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    else:
+        success("Allowed connections to proxy server %s" % host)
+
+    # NAT outbound traffic going through our tunnels
+    debug("NAT outbound traffic so that it goes through our tunnels")
+    localcmd = "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " % (interface - 1)
+    debug('SHELL CMD (local): ' + localcmd)
+    retcode = run(localcmd, shell=True, capture_output=True, text=True)
+    if retcode.returncode != 0:
+        error("Failed to NAT outbound traffic so that it goes through tunnel %s" % host)
+        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    else:
+        success("NAT'ed outbound traffic so that it goes through our tunnel %s" % host)
+
+
     # Build round robin route table command
     nexthopcmd = nexthopcmd + "nexthop via 10." + str(interface - 1) + ".254.1 dev tun" + str(
         interface - 1) + " weight 1 "
+
     # Add static routes for our SSH tunnels
-    os.system("ip route add %s via %s dev %s" % (host, defaultgateway, args.interface))
-    debug("SHELL CMD: ip route add " + host + " via " + defaultgateway + " dev " + args.interface)
+    debug("Adding static routes for our SSH tunnels")
+    localcmd = "ip route add %s via %s dev %s" % (host, defaultgateway, args.interface)
+    debug('SHELL CMD (local): ' + localcmd)
+    retcode = run(localcmd, shell=True, capture_output=True, text=True)
+    if retcode.returncode != 0:
+        error("Failed to add static routes for our SSH tunnel %s" % host)
+        debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+    else:
+        success("Added static routes for our SSH tunnel %s" % host)
+
     interface = interface + 1
     count = count - 1
 
-# Allow RFC 1918 routes
-os.system("ip route add 192.168.0.0/16 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface))
-os.system("ip route add 172.16.0.0/16 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface))
-os.system("ip route add 10.0.0.0/8 via %s dev %s > /dev/null 2>&1" % (defaultgateway, args.interface))
-
-# Replace with our own new default route
-os.system("%s" % nexthopcmd)
-debug("SHELL CMD: " + nexthopcmd)
+# Replace default route with the new default route
+debug("Replace default route with the new default route")
+localcmd = "%s" % nexthopcmd
+debug("SHELL CMD (local): " + nexthopcmd)
+retcode = run(localcmd, shell=True, capture_output=True, text=True)
+if retcode.returncode != 0:
+    error("Failed to Replace default route with the new default route")
+    debug("Failed command output is: " + retcode.stdout + " " + retcode.stderr)
+else:
+    success("Replaced default route with the new default route")
 
 success("Done!")
 print("\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
 print("+ Leave this terminal open and start another to run your commands.   +")
 print("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
+print(
+    "[" + bcolors.WARNING + "~" + bcolors.ENDC + "] Press " + bcolors.BOLD + "ctrl + c" + bcolors.ENDC + " to terminate the script gracefully.")
+
 if args.r:
-    print("[" + bcolors.WARNING + "~" + bcolors.ENDC + "] Press " + bcolors.BOLD + "ctrl + c" + bcolors.ENDC + " to terminate the script gracefully.")
     success("Rotating IPs.")
     rotate_hosts()
-else:
-    print("[" + bcolors.WARNING + "~" + bcolors.ENDC + "] Press " + bcolors.BOLD + "ctrl + c" + bcolors.ENDC + " to terminate the script gracefully.")
+
 while 1:
     null = input()
