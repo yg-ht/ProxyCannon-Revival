@@ -4,22 +4,18 @@
 
 #######################
 
-import boto.ec2
-import os
 import argparse
-import time
-import sys
-import subprocess
-import fcntl
-import struct
-import socket
-import hashlib
-import signal
 import datetime
+import hashlib
+import os
 import re
+import signal
+import subprocess
+import sys
+import time
 from subprocess import run
-from subprocess import Popen, PIPE, STDOUT
 
+import boto.ec2
 #############################################################################################
 # Handle Colored Output
 #############################################################################################
@@ -104,9 +100,9 @@ def cleanup(signal, frame):
     # Flush iptables
     success("Restoring iptables....")
     os.system("iptables -t nat -F")
-    debug("SHELL CMD: iptables cmd: iptables -t -nat -F")
+    debug("SHELL CMD (local): iptables cmd: iptables -t -nat -F")
     os.system("iptables -F")
-    debug("SHELL CMD: iptables cmd: iptables -F")
+    debug("SHELL CMD (local): iptables cmd: iptables -F")
     os.system("iptables-restore  < /tmp/%s" % iptablesName)
 
     # Cleaning routes
@@ -114,11 +110,11 @@ def cleanup(signal, frame):
     interface = args.num_of_instances
     for host in allInstances:
         os.system("route del %s dev %s" % (host, args.interface))
-        debug("SHELL CMD: route del " + host + " dev " + args.interface)
+        debug("SHELL CMD (local): route del " + host + " dev " + args.interface)
     os.system("ip route del default")
-    debug("SHELL CMD: ip route del default")
+    debug("SHELL CMD (local): ip route del default")
     os.system("ip route add default via %s dev %s" % (defaultgateway, args.interface))
-    debug("SHELL CMD: ip route add default via " + defaultgateway + " dev " + args.interface)
+    debug("SHELL CMD (local): ip route add default via " + defaultgateway + " dev " + args.interface)
 
     # Terminate instance
     success("Terminating Instances.....")
@@ -144,17 +140,17 @@ def cleanup(signal, frame):
         error("Deletion of key pair failed because %s" % e)
 
     # Remove local ssh key
-    debug("SHELL CMD: rm -f " + homeDir + "/.ssh/" + keyName + ".pem")
+    debug("SHELL CMD (local): rm -f " + homeDir + "/.ssh/" + keyName + ".pem")
     subprocess.Popen("rm -f %s/.ssh/%s.pem" % (homeDir, keyName), shell=True)
 
     # Remove local routing
     success("Restoring local routing....")
-    debug("SHELL CMD: echo 0 > /proc/sys/net/ipv4/ip_forward")
+    debug("SHELL CMD (local): echo 0 > /proc/sys/net/ipv4/ip_forward")
     os.system("echo 0 > /proc/sys/net/ipv4/ip_forward")
 
     # remove iptables saved config
     success("Removing local iptables save state")
-    debug("SHELL CMD: rm -rf  /tmp/%s" + iptablesName)
+    debug("SHELL CMD (local): rm -rf  /tmp/%s" + iptablesName)
     subprocess.Popen("rm /tmp/%s" % iptablesName, shell=True)
 
     # Log then close
@@ -263,7 +259,7 @@ def rotate_hosts():
                         route_interface) + " weight " + str(weight) + " "
                     route_interface = route_interface + 1
 
-                debug("SHELL CMD: " + nexthopcmd)
+                debug("SHELL CMD (local): " + nexthopcmd)
                 retcode = subprocess.call(nexthopcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
                 if str(retcode) != "0":
                     error("ERROR: Failed to install new route")
@@ -297,7 +293,7 @@ def rotate_hosts():
 
                 # Killing ssh tun cmd
                 killcmd = "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host
-                debug("SHELL CMD: " + killcmd)
+                debug("SHELL CMD (local): " + killcmd)
 
                 retcode = subprocess.call(killcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
                 if str(retcode) != "-15":
@@ -306,16 +302,16 @@ def rotate_hosts():
 
                 # remove iptables rule allowing SSH to EC2 Host
                 os.system("iptables -t nat -D POSTROUTING -d %s -j RETURN" % host)
-                debug("SHELL CMD: iptables -t nat -D POSTROUTING -d " + host + " -j RETURN")
+                debug("SHELL CMD (local): iptables -t nat -D POSTROUTING -d " + host + " -j RETURN")
 
                 # Nat outbound traffic going through our tunnels
                 os.system("iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % address_to_tunnel[str(host)])
-                debug("SHELL CMD: iptables -t nat -D POSTROUTING -o tun" + address_to_tunnel[
+                debug("SHELL CMD (local): iptables -t nat -D POSTROUTING -o tun" + address_to_tunnel[
                     str(host)] + " -j MASQUERADE")
 
                 # Remove Static Route to EC2 Host
                 os.system("ip route del %s" % host)
-                debug("SHELL CMD: ip route del " + host)
+                debug("SHELL CMD (local): ip route del " + host)
 
                 # Remove from route table
                 # Build New Route table with $times_run being set to weight 256
@@ -334,7 +330,7 @@ def rotate_hosts():
                             route_interface) + " weight " + str(weight) + " "
                     route_interface = route_interface + 1
 
-                debug("SHELL CMD: " + nexthopcmd)
+                debug("SHELL CMD (local): " + nexthopcmd)
                 retcode = subprocess.call(nexthopcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
                 if str(retcode) != "0":
                     error("ERROR: Failed to install new route")
@@ -402,12 +398,12 @@ def rotate_hosts():
 
                 # Add static routes for our SSH tunnels
                 os.system("ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, args.interface))
-                debug("SHELL CMD: ip route add " + swapped_ip + " via " + defaultgateway + " dev " + args.interface)
+                debug("SHELL CMD (local): ip route add " + swapped_ip + " via " + defaultgateway + " dev " + args.interface)
 
                 # Establish tunnel interface
                 sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50 root@%s &" % (
                     homeDir, keyName, address_to_tunnel[str(host)], address_to_tunnel[str(host)], swapped_ip)
-                debug("SHELL CMD: " + sshcmd)
+                debug("SHELL CMD (remote): " + sshcmd)
                 retry_cnt = 0
                 while ((retcode == 1) or (retry_cnt < 6)):
                     retcode = run(sshcmd, shell=True, capture_output=True, text=True)
@@ -426,7 +422,7 @@ def rotate_hosts():
                 # Provision interface
                 sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (
                     homeDir, keyName, swapped_ip, address_to_tunnel[str(host)], address_to_tunnel[str(host)])
-                debug("SHELL CMD: " + sshcmd)
+                debug("SHELL CMD (remote): " + sshcmd)
                 retry_cnt = 0
                 while ((retcode == 1) or (retry_cnt < 6)):
                     retcode = run(sshcmd, shell=True, capture_output=True, text=True)
@@ -446,7 +442,7 @@ def rotate_hosts():
                 ## Add return route back to us
                 sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s 'sudo route add 10.%s.254.2 dev tun%s'" % (
                     homeDir, keyName, swapped_ip, address_to_tunnel[str(host)], address_to_tunnel[str(host)])
-                debug("SHELL CMD: " + sshcmd)
+                debug("SHELL CMD (remote): " + sshcmd)
                 retry_cnt = 0
                 while ((retcode == 1) or (retry_cnt < 6)):
                     retcode = run(sshcmd, shell=True, capture_output=True, text=True)
@@ -479,7 +475,7 @@ def rotate_hosts():
                 route_cmd = 'ip route add 10.' + address_to_tunnel[str(host)] + '.254.0/30 via 0.0.0.0 dev tun' + \
                             address_to_tunnel[str(host)] + ' proto kernel scope link src 10.' + address_to_tunnel[
                                 str(host)] + '.254.2'
-                debug('SHELL CMD: ' + route_cmd)
+                debug('SHELL CMD (local): ' + route_cmd)
                 os.system(route_cmd)
 
                 # Allow connections to our proxy servers themselves
@@ -497,7 +493,7 @@ def rotate_hosts():
                         route_interface) + " weight " + str(weight) + " "
                     route_interface = route_interface + 1
 
-                debug("SHELL CMD: " + nexthopcmd)
+                debug("SHELL CMD (local): " + nexthopcmd)
                 retcode = subprocess.call(nexthopcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
                 if str(retcode) != "0":
                     error("ERROR: Failed to install new route")
