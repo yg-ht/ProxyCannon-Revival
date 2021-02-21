@@ -63,7 +63,7 @@ def runsystemcommand(description, islocal, cmd):
         if confirm.lower() != "y":
             warning("Run clean up? (y/n)")
             confirm = input()
-            if confirm.lower() != "n":
+            if confirm.lower() != "y":
                 exit("Not cleaning, shutting down")
             else:
                 cleanup()
@@ -133,6 +133,7 @@ def cleanup(proxy=None, cannon=None):
     success("Terminating Instances.....")
     for reservation in cleanup_reservations:
         for instance in reservation.instances:
+            debug("Attempting to terminate instance: %s" % str(instance))
             instance.terminate()
 
     warning("Pausing for 90 seconds so instances can properly terminate.....")
@@ -157,8 +158,8 @@ def cleanup(proxy=None, cannon=None):
     subprocess.Popen("rm -f %s/.ssh/%s.pem" % (homeDir, keyName), shell=True)
 
     # Remove local routing
-    runsystemcommand("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | " + localcmdsudoprefix +
-                 "tee -a /proc/sys/net/ipv4/ip_forward")
+    runsystemcommand("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | "
+                     + localcmdsudoprefix + "tee -a /proc/sys/net/ipv4/ip_forward")
 
     # remove iptables saved config
     runsystemcommand("Removing local iptables save state", True, localcmdsudoprefix + "rm -rf  /tmp/%s" + iptablesName)
