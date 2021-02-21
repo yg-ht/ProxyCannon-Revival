@@ -47,6 +47,9 @@ def debug(msg):
         print("[i] " + str(timestamp) + " : " + str(msg))
 
 
+#############################################################################################
+# Run system commands (outside of Python)
+#############################################################################################
 def runsyscmd(description, islocal, cmd):
     if islocal:
         target = 'local'
@@ -76,7 +79,6 @@ def runsyscmd(description, islocal, cmd):
 #############################################################################################
 # Handle Logging
 #############################################################################################
-
 def log(msg):
     timestamp = datetime.datetime.now()
     logfile = open("/tmp/" + logName, 'a')
@@ -97,8 +99,7 @@ def cleanup(proxy=None, cannon=None):
     cleanup_conn = None
     try:
         success("Connecting to Amazon's EC2...")
-        cleanup_conn = boto.ec2.connect_to_region(region_name=args.region, aws_access_key_id=aws_access_key_id,
-                                                  aws_secret_access_key=aws_secret_access_key)
+        cleanup_conn = connect_to_ec2()
     except Exception as e:
         error("Failed to connect to Amazon EC2 because: %s" % e)
         exit(2)
@@ -131,10 +132,9 @@ def cleanup(proxy=None, cannon=None):
 
     # Terminate instance
     success("Terminating Instances.....")
-    for reservation in cleanup_instances:
-        for instance in reservation.instances:
-            debug("Attempting to terminate instance: %s" % str(instance))
-            instance.terminate()
+    for instance in cleanup_instances:
+        debug("Attempting to terminate instance: %s" % str(instance))
+        instance.terminate()
 
     warning("Pausing for 90 seconds so instances can properly terminate.....")
     time.sleep(90)
@@ -170,6 +170,29 @@ def cleanup(proxy=None, cannon=None):
 
     sys.exit(0)
 
+#############################################################################################
+# Connect to AWS EC2
+#############################################################################################
+
+def connect_to_ec2():
+    EC2conn = None
+    try:
+        debug("Connecting to Amazon's EC2.")
+        EC2conn = boto.ec2.connect_to_region(region_name=args.region, aws_access_key_id=aws_access_key_id,
+                                             aws_secret_access_key=aws_secret_access_key)
+    except Exception as e:
+        warning("Failed to connect to Amazon EC2 because: %s" % e)
+        warning("Continue? (y/n)")
+        confirm = input()
+        if confirm.lower() != "y":
+            warning("Run clean up? (y/n)")
+            confirm = input()
+            if confirm.lower() != "y":
+                exit("Not cleaning, shutting down")
+            else:
+                cleanup()
+                exit("Cleaning complete, shutting down")
+    return EC2conn
 
 #############################################################################################
 # Rotate Hosts
@@ -180,22 +203,7 @@ def rotate_hosts():
     # until told otherwise run this loop
     while True:
         # connect to EC2
-        try:
-            debug("Connecting to Amazon's EC2.")
-            rotate_conn = boto.ec2.connect_to_region(region_name=args.region, aws_access_key_id=aws_access_key_id,
-                                                     aws_secret_access_key=aws_secret_access_key)
-        except Exception as e:
-            warning("Failed to connect to Amazon EC2 because: %s" % e)
-            warning("Continue? (y/n)")
-            confirm = input()
-            if confirm.lower() != "y":
-                warning("Run clean up? (y/n)")
-                confirm = input()
-                if confirm.lower() != "y":
-                    exit("Not cleaning, shutting down")
-                else:
-                    cleanup()
-                    exit("Cleaning complete, shutting down")
+        rotate_conn = connect_to_ec2()
 
         # return list of reservations
         rotate_reservations = rotate_conn.get_only_instances(filters={"tag:Name": nameTag,
@@ -333,14 +341,7 @@ def rotate_hosts():
                 cleanup()
 
             # Connect to EC2 and return list of reservations
-            ip_list_conn = None
-            try:
-                ip_list_conn = boto.ec2.connect_to_region(region_name=args.region,
-                                                          aws_access_key_id=aws_access_key_id,
-                                                          aws_secret_access_key=aws_secret_access_key)
-            except Exception as e:
-                error("Failed to connect to Amazon EC2 because: %s" % e)
-
+            ip_list_conn = connect_to_ec2()
             ip_list_instances = ip_list_conn.get_only_instances(
                 filters={"tag:Name": nameTag, "instance-state-name": "running"})
 
@@ -367,8 +368,7 @@ def rotate_hosts():
                          homeDir, keyName, address_to_tunnel[str(host)], address_to_tunnel[str(host)], swapped_ip)
             debug('SHELL CMD (remote): %s' % sshcmd)
             retry_cnt = 0
-            retcode = 0
-            while (retcode == 1) or (retry_cnt < 6):
+            while retry_cnt < 6:
                 retcode = run(sshcmd, shell=True, capture_output=True, text=True)
                 if retcode.returncode != 0:
                     warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
@@ -422,8 +422,8 @@ def rotate_hosts():
             nexthopcmd = "ip route replace default scope global "
             weight = 1
             while route_interface < args.num_of_instances:
-                nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + ".254.1 dev tun" + str(
-                    route_interface) + " weight " + str(weight) + " "
+                nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + \
+                             ".254.1 dev tun" + str(route_interface) + " weight " + str(weight) + " "
                 route_interface = route_interface + 1
 
             runsyscmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
@@ -444,7 +444,6 @@ def rotate_hosts():
 #############################################################################################
 # Get Interface IP
 #############################################################################################
-
 def get_ip_address(ifname):
     ip = netifaces.ifaddresses(ifname)[netifaces.AF_INET][0]['addr']
     debug(ip)
@@ -454,7 +453,6 @@ def get_ip_address(ifname):
 #############################################################################################
 # Get Default Route
 #############################################################################################
-
 def get_default_gateway_linux():
     gws = netifaces.gateways()
     gwip = gws['default'][netifaces.AF_INET][0]
@@ -465,7 +463,6 @@ def get_default_gateway_linux():
 #############################################################################################
 # System and Program Arguments
 #############################################################################################
-
 parser = argparse.ArgumentParser()
 parser.add_argument('-id', '--image-id', nargs='?', default='ami-d05e75b8',
                     help="Amazon ami image ID.  Example: ami-d05e75b8. If not set, ami-d05e75b8.")
@@ -490,9 +487,8 @@ debug("Homedir: " + homeDir)
 address_to_tunnel = {}
 
 #############################################################################################
-# Sanity Checks
+# Sanity Checks and set up
 #############################################################################################
-
 # Check if running as root
 debug("Checking for root / sudo privileges")
 if os.geteuid() != 0:
@@ -552,6 +548,10 @@ else:
 debug("AWS_ACCESS_KEY_ID: " + aws_access_key_id)
 debug("AWS_SECRET_ACCESS_KEY: " + aws_secret_access_key)
 
+
+#############################################################################################
+# The main event
+#############################################################################################
 # Generate sshkeyname
 if args.name:
     # SSH Key Name
@@ -613,20 +613,9 @@ confirm = input()
 if confirm.lower() != "y":
     exit("Yeah you're right its probably better to play it safe.")
 
-#############################################################################################
-# System and Program Arguments
-#############################################################################################
-
 # Initialize connection to EC2
 debug("Connecting to Amazon's EC2...")
-conn = None
-try:
-    conn = boto.ec2.connect_to_region(region_name=args.region, aws_access_key_id=aws_access_key_id,
-                                      aws_secret_access_key=aws_secret_access_key)
-# conn =  boto.ec2.connect_to_region(region_name=args.region)
-except Exception as e:
-    error("Failed to connect to Amazon EC2 because: %s" % e)
-    exit()
+conn = connect_to_ec2()
 
 # Generate KeyPair
 debug("Generating ssh keypairs...")
@@ -750,10 +739,9 @@ for host in allInstances:
              (homeDir, keyName, interface, interface, host)
     debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
-    retcode = None
-    while ((retcode != 0) or (retry_cnt < 6)):
+    while retry_cnt < 6:
         retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
-        if retcode:
+        if retcode != 0:
             warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
             retry_cnt = retry_cnt + 1
             time.sleep(1)
