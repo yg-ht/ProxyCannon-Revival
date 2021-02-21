@@ -199,250 +199,228 @@ def connect_to_ec2():
 #############################################################################################
 # Rotate Hosts
 #############################################################################################
-def rotate_hosts():
-    # connect to EC2
-    rotate_conn = connect_to_ec2()
+def rotate_host(instance):
+    host = instance.ip_address
+    debug("Rotating IP for: " + str(host))
 
-    # return list of reservations
-    rotate_reservations = rotate_conn.get_only_instances(filters={"tag:Name": nameTag,
-                                                                  "instance-state-name": "running"})
+    #########################################################################################
+    # Identify the instances so we can create routing tables for tear down
+    #########################################################################################
 
-    # loop round detected instances of each reservation
-    for instance in rotate_reservations:
-
-        # build ip filter list
-        retry_cnt = 0
-        ipfilter_instances = None
-        while retry_cnt < 6:
-            if retry_cnt == 5:
-                error("giving up...")
-                cleanup()
-            try:
-                ipfilter_instances = rotate_conn.get_only_instances(
-                    filters={"tag:Name": nameTag, "instance-state-name": "running"})
-                retry_cnt = 6
-            except Exception as e:
-                warning("Failed to get instances because: %s (ipfilter_reservations). Retrying..." % e)
-                retry_cnt = retry_cnt + 1
-                time.sleep(+int(retry_cnt))
-
-        # Grab list of public IP's assigned to instances that were launched and add them to a list
-        ipfilter = []
-        for ipfilter_instance in ipfilter_instances:
-            ipfilter.append(ipfilter_instance.ip_address)
-        debug("Public IP's for all instances: " + str(ipfilter))
-
-        host = instance.ip_address
-        debug("Rotating: " + str(host))
-
-        # Build New Route table with $times_run being set to weight 256
-        nexthopcmd = "ip route replace default scope global "
-
-        route_interface = 0
-
-        while route_interface < args.num_of_instances:
-            if route_interface == address_to_tunnel[str(host)]:
-                weight = 1
-            else:
-                weight = 2
-            nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + ".254.1 dev tun" + str(
-                route_interface) + " weight " + str(weight) + " "
-            route_interface = route_interface + 1
-
-        run_sys_cmd("install new route", True, localcmdsudoprefix + nexthopcmd)
-
-        # check to validate that no sessions are established
-        # Check TCP RX&TX QUEUE
-        while True:
-            # netstat -ant | grep ESTABLISHED | grep 52.90.212.53 | awk '{print $2$3}'
-            p1 = subprocess.Popen(['netstat', '-ant'], stdout=subprocess.PIPE)
-            p2 = subprocess.Popen(['grep', 'ESTABLISHED'], stdin=p1.stdout, stdout=subprocess.PIPE)
-            p3 = subprocess.Popen(['grep', host], stdin=p2.stdout, stdout=subprocess.PIPE)
-            awkcmd = ['awk', '{print $2$3}']  # had some problems escaping the single quotes, went with this
-            p4 = subprocess.Popen(awkcmd, stdin=p3.stdout, stdout=subprocess.PIPE)
-            stat, err = p4.communicate()
-            p1.stdout.close()
-            p2.stdout.close()
-            p3.stdout.close()
-            p4.stdout.close()
-            debug("Connection Stats " + str(stat.strip()))
-            if int(stat) > 0:
-                debug("Connection is in use, sleeping and trying again in .5 seconds")
-                time.sleep(.5)
-            else:
-                debug("Connection is free")
-                break
-
-        # Killing ssh tunnel
-        run_sys_cmd("Killing ssh tunnel", True, localcmdsudoprefix +
-                    "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host)
-
-        # Remove iptables rule allowing SSH to EC2 Host
-        run_sys_cmd("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
-                    "iptables -t nat -D POSTROUTING -d %s -j RETURN" % host)
-
-        # Remove NAT outbound traffic going through our tunnels
-        run_sys_cmd("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
-                    "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % address_to_tunnel[str(host)])
-
-        # Remove Static Route to EC2 Host
-        run_sys_cmd("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % host)
-
-        # Remove from route table
-        # Build New Route table with $times_run being set to weight 256
-        nexthopcmd = "ip route replace default scope global "
-
-        route_interface = 0
-        # Change to if not
-        while route_interface < args.num_of_instances:
-            if int(route_interface) != int(address_to_tunnel[str(host)]):
-                weight = 1
-                nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + ".254.1 dev tun" + \
-                             str(route_interface) + " weight " + str(weight) + " "
-            route_interface = route_interface + 1
-
-        # Install new routes
-        run_sys_cmd("Installing new route", True, localcmdsudoprefix + nexthopcmd)
-
-        # Requesting new IP allocation
-        new_address = None
-        try:
-            new_address = rotate_conn.allocate_address()
-        except Exception as e:
-            error("Failed to obtain a new address because: " + str(e))
-            cleanup()
-        debug("Temporary Elastic IP address: " + new_address.public_ip)
-
-        time.sleep(5)
-        # Associating new address
-        rotate_conn.associate_address(instance.id, new_address.public_ip)
-
-        # At this point, your VM should respond on its public ip address.
-        # NOTE: It may take up to 60 seconds for the Elastic IP address to begin working
-        debug("Sleeping for 30s to allow for new IP to take effect")
-        time.sleep(30)
-
-        # Remove association forcing a new public ip
-        try:
-            rotate_conn.disassociate_address(new_address.public_ip)
-        except Exception as e:
-            error("Failed to dissassociate the address " + str(new_address.public_ip) + " because: " + str(e))
-            cleanup()
-        debug("Sleeping for 60s to allow for new IP to take effect")
-        time.sleep(60)
-
-        # Return the Second Elastic IP address back to address pool
-        try:
-            rotate_conn.release_address(allocation_id=new_address.allocation_id)
-        except Exception as e:
-            error("Failed to release the address " + str(new_address.public_ip) + " because: " + str(e))
-            cleanup()
-
-        # Connect to EC2 and return list of reservations
-        ip_list_conn = connect_to_ec2()
-        ip_list_instances = ip_list_conn.get_only_instances(
+    # get list of instances
+    ipfilter_instances = None
+    try:
+        ipfilter_instances = rotate_conn.get_only_instances(
             filters={"tag:Name": nameTag, "instance-state-name": "running"})
+    except Exception as e:
+        error("Failed to get instances because: %s (ipfilter_reservations)." % e)
 
-        # Grab list of public IP's assigned to instances that were launched
-        all_addresses = []
-        for ip_list_instance in ip_list_instances:
-            all_addresses.append(ip_list_instance.ip_address)
-        debug("Public IP's for all instances: " + str(all_addresses))
+    # get public IP's assigned to instances
+    ipfilter = []
+    for ipfilter_instance in ipfilter_instances:
+        ipfilter.append(ipfilter_instance.ip_address)
+    debug("Public IP's for all instances: " + str(ipfilter))
 
-        swapped_ip = ''
-        # print("all_addresses: " + str(all_addresses))
-        for address in all_addresses:
-            if address not in ipfilter:
-                debug("found new ip: " + str(address))
-                swapped_ip = str(address)
+    #########################################################################################
+    # Tear down
+    #########################################################################################
 
-        sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (homeDir, keyName, host)
+    # implement multipath routing that doesn't include the host we are tearing down
+    nexthopcmd = "ip route replace default scope global "
+    route_interface = 0
+    while route_interface < args.num_of_instances:
+        if int(route_interface) != int(address_to_tunnel[str(host)]):
+            nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + ".254.1 dev tun" + \
+                         str(route_interface) + " weight 1"
+            # As we are using multipath routing and will do route cache-busting elsewhere
+            # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
+        route_interface = route_interface + 1
+    # Install new (reduced) routes
+    run_sys_cmd("Installing new route", True, localcmdsudoprefix + nexthopcmd)
 
-        # Add static routes for our SSH tunnels
-        run_sys_cmd("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
-                    "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, networkInterface))
+    # Pause for a second to allow any existing connections using the old route to close
+    time.sleep(1)
 
-        # Establish tunnel interface
-        sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
-                 "ServerAliveInterval=50 ubuntu@%s &" % (
-                     homeDir, keyName, address_to_tunnel[str(host)], address_to_tunnel[str(host)], swapped_ip)
-        debug('SHELL CMD (remote): %s' % sshcmd)
-        retry_cnt = 0
-        while retry_cnt < 6:
-            retcode = run(sshcmd, shell=True, capture_output=True, text=True)
-            if retcode.returncode != 0:
-                warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
-                    swapped_ip, address_to_tunnel[str(host)]))
-                debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
-                retry_cnt = retry_cnt + 1
-                time.sleep(1 + int(retry_cnt))
-            else:
-                break
-            if retry_cnt == 5:
-                error("Giving up...")
-                cleanup()
+    # check to validate that no sessions are established
+    # Check TCP RX&TX QUEUE
+    while True:
+        # netstat -ant | grep ESTABLISHED | grep x.x.x.x | awk '{print $2$3}'
+        p1 = subprocess.Popen(['netstat', '-ant'], stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(['grep', 'ESTABLISHED'], stdin=p1.stdout, stdout=subprocess.PIPE)
+        p3 = subprocess.Popen(['grep', host], stdin=p2.stdout, stdout=subprocess.PIPE)
+        awkcmd = ['awk', '{print $2$3}']  # had some problems escaping the single quotes, went with this
+        p4 = subprocess.Popen(awkcmd, stdin=p3.stdout, stdout=subprocess.PIPE)
+        stat, err = p4.communicate()
+        p1.stdout.close()
+        p2.stdout.close()
+        p3.stdout.close()
+        p4.stdout.close()
+        debug("Connection Stats " + str(stat.strip()))
+        if int(stat) > 0:
+            debug("Connection is in use, sleeping and trying again in .5 seconds")
+            time.sleep(.5)
+        else:
+            debug("Connection is free")
+            break
 
-        # Provision remote tun interface
-        run_sys_cmd("Setting IP on remote tun adapter", False, sshbasecmd +
-                    "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
-                    (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+    # Killing ssh tunnel
+    run_sys_cmd("Killing ssh tunnel", True, localcmdsudoprefix +
+                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host)
 
-        # Add return route back to us
-        run_sys_cmd("Adding return route back to us", False, sshbasecmd +
-                    "'sudo route add 10.%s.254.2 dev tun%s'" %
-                    (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+    # Remove iptables rule allowing SSH to EC2 Host
+    run_sys_cmd("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
+                "iptables -t nat -D POSTROUTING -d %s -j RETURN" % host)
 
-        # Turn up our interface
-        run_sys_cmd("Turn up our interface", True, localcmdsudoprefix +
-                    "ifconfig tun%s up" % address_to_tunnel[str(host)])
+    # Remove NAT outbound traffic going through our tunnels
+    run_sys_cmd("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
+                "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % address_to_tunnel[str(host)])
 
-        # Provision interface
-        run_sys_cmd("Provision interface", True, localcmdsudoprefix +
-                    "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (address_to_tunnel[str(host)],
-                                                                            address_to_tunnel[str(host)]))
-        time.sleep(2)
+    # Remove Static Route to EC2 Host
+    run_sys_cmd("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % host)
 
-        # Adding local route (shouldn't be needed)
-        route_cmd = 'ip route add 10.' + address_to_tunnel[str(host)] + '.254.0/30 via 0.0.0.0 dev tun' + \
-                    address_to_tunnel[str(host)] + ' proto kernel scope link src 10.' + address_to_tunnel[
-                        str(host)] + '.254.2'
-        run_sys_cmd("Adding local route (shouldn't be needed)", True, localcmdsudoprefix + route_cmd)
+    #########################################################################################
+    # Reconfigure EC2
+    #########################################################################################
 
-        # Allow connections to our proxy servers
-        run_sys_cmd("Allow connections to our proxy servers", True, localcmdsudoprefix +
-                    "iptables -t nat -I POSTROUTING -d %s -j RETURN" % swapped_ip)
+    # To get a new public IP you need to replace the existing one with a temporary (Elastic) IP
+    # and then release the temporary IP to be given a permanent public IP.  Bit hacky, but works.
 
-        # NAT outbound traffic going through our tunnels
-        run_sys_cmd("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
-                    "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
-                    address_to_tunnel[str(host)])
+    # Requesting new IP allocation
+    temporary_address = None
+    try:
+        temporary_address = rotate_conn.allocate_address()
+    except Exception as e:
+        error("Failed to obtain a new address because: " + str(e))
+        cleanup()
+    debug("Temporary Elastic IP address: " + temporary_address.public_ip)
 
-        # Rebuild Route table
-        route_interface = 0
-        nexthopcmd = "ip route replace default scope global "
-        weight = 1
-        while route_interface < args.num_of_instances:
-            nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + \
-                         ".254.1 dev tun" + str(route_interface) + " weight " + str(weight) + " "
-            route_interface = route_interface + 1
+    time.sleep(5)
+    # Associating new temporary address
+    rotate_conn.associate_address(instance.id, temporary_address.public_ip)
 
-        run_sys_cmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
+    # At this point, your VM should respond on its public ip address.
+    # NOTE: It may take up to 60 seconds for the temporary Elastic IP address to begin working
+    debug("Sleeping for 30s to allow for new temporary IP to take effect")
+    time.sleep(30)
 
-        # Add static routes for our SSH tunnels
-        run_sys_cmd("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
-                    "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway,
-                                                       networkInterface))
+    # Remove temporary IP association forcing a new permanent public IP
+    try:
+        rotate_conn.disassociate_address(temporary_address.public_ip)
+    except Exception as e:
+        error("Failed to disassociate the address " + str(temporary_address.public_ip) + " because: " + str(e))
+        cleanup()
+    debug("Sleeping for 60s to allow for new permanent IP to take effect")
+    time.sleep(60)
 
-        # Removing from local dict
-        address_to_tunnel[str(swapped_ip)] = address_to_tunnel[str(host)]
-        del address_to_tunnel[str(host)]
-        # print address_to_tunnel
-        log(str(swapped_ip))
-        # interface = interface + 1
+    # Return the temporary IP address back to address pool
+    try:
+        rotate_conn.release_address(allocation_id=temporary_address.allocation_id)
+    except Exception as e:
+        error("Failed to release the address " + str(temporary_address.public_ip) + " because: " + str(e))
+        cleanup()
+
+    #########################################################################################
+    # Identify the instances so we can create routing tables for stand up
+    #########################################################################################
+
+    # Connect to EC2 and get list of instances
+    ip_list_conn = connect_to_ec2()
+    ip_list_instances = ip_list_conn.get_only_instances(
+        filters={"tag:Name": nameTag, "instance-state-name": "running"})
+
+    # Grab list of public IP's assigned to instances that were launched
+    all_addresses = []
+    for ip_list_instance in ip_list_instances:
+        all_addresses.append(ip_list_instance.ip_address)
+    debug("Public IP's for all instances: " + str(all_addresses))
+
+    swapped_ip = ''
+    # print("all_addresses: " + str(all_addresses))
+    for address in all_addresses:
+        if address not in ipfilter:
+            debug("found new ip: " + str(address))
+            swapped_ip = str(address)
+
+    #########################################################################################
+    # Stand up
+    #########################################################################################
+
+    sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (homeDir, keyName, swapped_ip)
+
+    # Add static routes for our SSH tunnels
+    run_sys_cmd("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
+                "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, networkInterface))
+
+    # Establish tunnel interface
+    sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
+             "ServerAliveInterval=50 ubuntu@%s &" % (
+                 homeDir, keyName, address_to_tunnel[str(host)], address_to_tunnel[str(host)], swapped_ip)
+    debug('SHELL CMD (remote): %s' % sshcmd)
+    retry_cnt = 0
+    while retry_cnt < 6:
+        retcode = run(sshcmd, shell=True, capture_output=True, text=True)
+        if retcode.returncode != 0:
+            warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
+                swapped_ip, address_to_tunnel[str(host)]))
+            debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
+            retry_cnt = retry_cnt + 1
+            time.sleep(1 + int(retry_cnt))
+        else:
+            break
+        if retry_cnt == 5:
+            error("Giving up...")
+            cleanup()
+
+    # Provision remote tun interface
+    run_sys_cmd("Setting IP on remote tun adapter", False, sshbasecmd +
+                "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
+                (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+
+    # Add return route back to us
+    run_sys_cmd("Adding return route back to us", False, sshbasecmd +
+                "'sudo route add 10.%s.254.2 dev tun%s'" %
+                (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+
+    # Turn up our interface
+    run_sys_cmd("Turn up our interface", True, localcmdsudoprefix +
+                "ifconfig tun%s up" % address_to_tunnel[str(host)])
+
+    # Provision interface
+    run_sys_cmd("Provision interface", True, localcmdsudoprefix +
+                "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (address_to_tunnel[str(host)],
+                                                                        address_to_tunnel[str(host)]))
+    time.sleep(2)
+
+    # Allow local connections to the proxy server
+    run_sys_cmd("Allow connections to our proxy servers", True, localcmdsudoprefix +
+                "iptables -t nat -I POSTROUTING -d %s -j RETURN" % swapped_ip)
+
+    # NAT outbound traffic going through our tunnels
+    run_sys_cmd("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
+                "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
+                address_to_tunnel[str(host)])
+
+    # Rebuild Route table
+    route_interface = 0
+    nexthopcmd = "ip route replace default scope global "
+    while route_interface < args.num_of_instances:
+        nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + \
+                     ".254.1 dev tun" + str(route_interface) + " weight 1 "
+        # see earlier note about accepting ECMP routing (i.e. weight = 1 for all)
+        route_interface = route_interface + 1
+
+    run_sys_cmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
+
+    # print address_to_tunnel
+    log(str(swapped_ip))
+
+    # Removing from local dict
+    address_to_tunnel[str(swapped_ip)] = address_to_tunnel[str(host)]
+    del address_to_tunnel[str(host)]
 
 
 #############################################################################################
-# Rotate Hosts
+# Perform cache-busting on ECMP routing
 #############################################################################################
 def cache_bust():
     pass
@@ -833,7 +811,16 @@ if __name__ == '__main__':
     while True:
         if args.r:
             success("Rotating infrastructure IPs.")
-            rotate_hosts()
+            # connect to EC2
+            rotate_conn = connect_to_ec2()
+
+            # return list of reservations
+            rotate_reservations = rotate_conn.get_only_instances(filters={"tag:Name": nameTag,
+                                                                          "instance-state-name": "running"})
+
+            # loop round detected instances of each reservation
+            for instance in rotate_reservations:
+                rotate_host(instance)
         if args.cb:
             success("Performing multipath cache bust")
             cache_bust()
