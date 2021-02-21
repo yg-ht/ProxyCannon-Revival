@@ -47,7 +47,7 @@ def debug(msg):
         print("[i] " + str(timestamp) + " : " + str(msg))
 
 
-def runsystemcommand(description, islocal, cmd):
+def runsyscmd(description, islocal, cmd):
     if islocal:
         target = 'local'
     else:
@@ -70,6 +70,7 @@ def runsystemcommand(description, islocal, cmd):
                 exit("Cleaning complete, shutting down")
     else:
         success("Success: %s" % description)
+        return retcode.stdout
 
 
 #############################################################################################
@@ -115,19 +116,19 @@ def cleanup(proxy=None, cannon=None):
     debug("Public IP's for all instances: " + str(all_instances))
 
     # Flush iptables
-    runsystemcommand("Flushing iptables NAT chain", True, "%s iptables -t nat -F" % localcmdsudoprefix)
-    runsystemcommand("Flushing remaining iptables state", True, "%s iptables -F" % localcmdsudoprefix)
-    runsystemcommand("Restoring old iptables state", True, "%s iptables-restore  < /tmp/%s" %
-                     (localcmdsudoprefix, iptablesName))
+    runsyscmd("Flushing iptables NAT chain", True, "%s iptables -t nat -F" % localcmdsudoprefix)
+    runsyscmd("Flushing remaining iptables state", True, "%s iptables -F" % localcmdsudoprefix)
+    runsyscmd("Restoring old iptables state", True, "%s iptables-restore  < /tmp/%s" %
+              (localcmdsudoprefix, iptablesName))
 
     # Cleaning routes
     success("Correcting Routes.....")
     for host in all_instances:
-        runsystemcommand("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
+        runsyscmd("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
                          "route del %s dev %s" % (host, networkInterface))
-    runsystemcommand("Delete the default route", True, localcmdsudoprefix + "ip route del default")
-    runsystemcommand("Adding default route", True, localcmdsudoprefix + "ip route add default via %s dev %s" %
-                     (defaultgateway, networkInterface))
+    runsyscmd("Delete the default route", True, localcmdsudoprefix + "ip route del default")
+    runsyscmd("Adding default route", True, localcmdsudoprefix + "ip route add default via %s dev %s" %
+              (defaultgateway, networkInterface))
 
     # Terminate instance
     success("Terminating Instances.....")
@@ -154,15 +155,14 @@ def cleanup(proxy=None, cannon=None):
         error("Deletion of key pair failed because %s" % e)
 
     # Remove local ssh key
-    debug("SHELL CMD (local): rm -f " + homeDir + "/.ssh/" + keyName + ".pem")
-    subprocess.Popen("rm -f %s/.ssh/%s.pem" % (homeDir, keyName), shell=True)
+    runsyscmd("Remove local ssh key", True, "rm -f %s/.ssh/%s.pem" % (homeDir, keyName))
 
     # Remove local routing
-    runsystemcommand("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | "
-                     + localcmdsudoprefix + "tee -a /proc/sys/net/ipv4/ip_forward")
+    runsyscmd("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | "
+              + localcmdsudoprefix + "tee -a /proc/sys/net/ipv4/ip_forward")
 
     # remove iptables saved config
-    runsystemcommand("Removing local iptables save state", True, localcmdsudoprefix + "rm -rf  /tmp/%s" + iptablesName)
+    runsyscmd("Removing local iptables save state", True, localcmdsudoprefix + "rm -rf  /tmp/%s" + iptablesName)
 
     # Log then close
     log("ProxyCannon-Temp Finished.")
@@ -272,12 +272,7 @@ def rotate_hosts():
                         route_interface) + " weight " + str(weight) + " "
                     route_interface = route_interface + 1
 
-                debug("SHELL CMD (local): " + nexthopcmd)
-                retcode = subprocess.call(nexthopcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
-                if str(retcode) != "0":
-                    error("ERROR: Failed to install new route")
-                    debug("retcode: " + str(retcode))
-                    cleanup()
+                runsyscmd("install new route", True, localcmdsudoprefix + nexthopcmd)
 
                 stat = 1
                 while True:
@@ -313,15 +308,15 @@ def rotate_hosts():
                     debug("retcode: " + str(retcode))
 
                 # Remove iptables rule allowing SSH to EC2 Host
-                runsystemcommand("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
+                runsyscmd("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
                                  "iptables -t nat -D POSTROUTING -d %s -j RETURN" % host)
 
                 # Remove NAT outbound traffic going through our tunnels
-                runsystemcommand("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
+                runsyscmd("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
                                  "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % address_to_tunnel[str(host)])
 
                 # Remove Static Route to EC2 Host
-                runsystemcommand("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % host)
+                runsyscmd("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % host)
 
                 # Remove from route table
                 # Build New Route table with $times_run being set to weight 256
@@ -337,12 +332,8 @@ def rotate_hosts():
                             route_interface) + " weight " + str(weight) + " "
                     route_interface = route_interface + 1
 
-                debug("SHELL CMD (local): " + nexthopcmd)
-                retcode = subprocess.call(nexthopcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
-                if str(retcode) != "0":
-                    error("ERROR: Failed to install new route")
-                    debug("retcode: " + str(retcode))
-                    cleanup()
+                # Install new routes
+                runsyscmd("Installing new route", True, localcmdsudoprefix + nexthopcmd)
 
                 # Requesting new IP allocation
                 new_address = None
@@ -405,12 +396,12 @@ def rotate_hosts():
                         swapped_ip = str(address)
 
                 # Add static routes for our SSH tunnels
-                runsystemcommand("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
+                runsyscmd("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
                                  "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, networkInterface))
 
                 # Establish tunnel interface
                 sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
-                         "ServerAliveInterval=50 root@%s &" % (
+                         "ServerAliveInterval=50 ubuntu@%s &" % (
                              homeDir, keyName, address_to_tunnel[str(host)], address_to_tunnel[str(host)], swapped_ip)
                 debug('SHELL CMD (remote): %s' % sshcmd)
                 retry_cnt = 0
@@ -429,21 +420,21 @@ def rotate_hosts():
                         cleanup()
 
                 # Provision remote tun interface
-                runsystemcommand("Setting IP on remote tun adapter", False, sshbasecmd +
+                runsyscmd("Setting IP on remote tun adapter", False, sshbasecmd +
                                  "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
-                                 (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+                          (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
 
                 # Add return route back to us
-                runsystemcommand("Adding return route back to us", False, sshbasecmd +
+                runsyscmd("Adding return route back to us", False, sshbasecmd +
                                  "'sudo route add 10.%s.254.2 dev tun%s'" %
-                                 (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+                          (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
 
                 # Turn up our interface
-                runsystemcommand("Turn up our interface", True, localcmdsudoprefix +
+                runsyscmd("Turn up our interface", True, localcmdsudoprefix +
                                  "ifconfig tun%s up" % address_to_tunnel[str(host)])
 
                 # Provision interface
-                runsystemcommand("Provision interface", True, localcmdsudoprefix +
+                runsyscmd("Provision interface", True, localcmdsudoprefix +
                                  "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (address_to_tunnel[str(host)],
                                                                                          address_to_tunnel[str(host)]))
                 time.sleep(2)
@@ -452,16 +443,16 @@ def rotate_hosts():
                 route_cmd = 'ip route add 10.' + address_to_tunnel[str(host)] + '.254.0/30 via 0.0.0.0 dev tun' + \
                             address_to_tunnel[str(host)] + ' proto kernel scope link src 10.' + address_to_tunnel[
                                 str(host)] + '.254.2'
-                runsystemcommand("Adding local route (shouldn't be needed)", True, localcmdsudoprefix + route_cmd)
+                runsyscmd("Adding local route (shouldn't be needed)", True, localcmdsudoprefix + route_cmd)
 
                 # Allow connections to our proxy servers
-                runsystemcommand("Allow connections to our proxy servers", True, localcmdsudoprefix +
+                runsyscmd("Allow connections to our proxy servers", True, localcmdsudoprefix +
                                  "iptables -t nat -I POSTROUTING -d %s -j RETURN" % swapped_ip)
 
                 # NAT outbound traffic going through our tunnels
-                runsystemcommand("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
+                runsyscmd("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
                                  "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
-                                 address_to_tunnel[str(host)])
+                          address_to_tunnel[str(host)])
 
                 # Rebuild Route table
                 route_interface = 0
@@ -472,10 +463,10 @@ def rotate_hosts():
                         route_interface) + " weight " + str(weight) + " "
                     route_interface = route_interface + 1
 
-                runsystemcommand("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
+                runsyscmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
 
                 # Add static routes for our SSH tunnels
-                runsystemcommand("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
+                runsyscmd("Add static routes for our SSH tunnels", True, localcmdsudoprefix +
                                  "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway,
                                                                     networkInterface))
 
@@ -744,60 +735,56 @@ for host in allInstances:
     sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (homeDir, keyName, host)
 
     # Check connectivity and add the host to known_hosts file
-    runsystemcommand("Checking connectivity via SSH with %s" % host, False, sshbasecmd + "'id'")
+    runsyscmd("Checking connectivity via SSH with %s" % host, False, sshbasecmd + "'id'")
 
     # Enable Tunneling on the remote host
-    runsystemcommand("Enabling tunneling via SSH on %s" % host, False, sshbasecmd +
+    runsyscmd("Enabling tunneling via SSH on %s" % host, False, sshbasecmd +
                      "'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'")
 
-    # Permit Root Logon
-    runsystemcommand("Permitting root user logon on %s" % host, False, sshbasecmd +
-                     "'sudo sed -i \"s/PermitRootLogin without-password/PermitRootLogin yes/\" /etc/ssh/sshd_config' ")
-
     # Copy Keys
-    runsystemcommand("Copying ssh keys to from normal user to root user on %s" % host, False, sshbasecmd +
+    runsyscmd("Copying ssh keys to from normal user to root user on %s" % host, False, sshbasecmd +
                      "'sudo cp /home/ubuntu/.ssh/authorized_keys /root/.ssh/'")
 
     # Restarting Service to take new config (you'd think a simple reload would be enough)
-    runsystemcommand("Restarting Service to take new config on %s" % host, False, sshbasecmd + "'sudo service ssh "
+    runsyscmd("Restarting Service to take new config on %s" % host, False, sshbasecmd + "'sudo service ssh "
                                                                                                "restart'")
 
     # Provision interface
-    runsystemcommand("Provisioning tun%s interface on %s" % (interface, host), False, sshbasecmd +
+    runsyscmd("Provisioning tun%s interface on %s" % (interface, host), False, sshbasecmd +
                      "'sudo ip tuntap add dev tun%s mode tun'" % interface)
 
     # Configure interface
-    runsystemcommand("Configuring tun%s interface on %s" % (interface, host), False, sshbasecmd +
+    runsyscmd("Configuring tun%s interface on %s" % (interface, host), False, sshbasecmd +
                      "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (interface, interface))
 
     # Enable forwarding on remote host
-    runsystemcommand("Enable forwarding on remote host", False, sshbasecmd + "'sudo su root -c \"echo 1 > "
+    runsyscmd("Enable forwarding on remote host", False, sshbasecmd + "'sudo su root -c \"echo 1 > "
                                                                              "/proc/sys/net/ipv4/ip_forward\"'")
 
     # Provision iptables on remote host
-    runsystemcommand("Provision iptables on remote host", False, sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
+    runsyscmd("Provision iptables on remote host", False, sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
                                                                               "-o eth0 -j MASQUERADE'")
 
     # Add return route back to us
-    runsystemcommand("Add return route back to us", False, sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
-                     % (interface, interface))
+    runsyscmd("Add return route back to us", False, sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
+              % (interface, interface))
 
     # Create tun interface
-    runsystemcommand("Creating local interface tun%s" % str(interface), True, localcmdsudoprefix +
+    runsyscmd("Creating local interface tun%s" % str(interface), True, localcmdsudoprefix +
                      "ip tuntap add dev tun%s mode tun" % str(interface))
 
     # Turn up our interface
-    runsystemcommand("Turning up interface tun%s" % str(interface), True, localcmdsudoprefix +
+    runsyscmd("Turning up interface tun%s" % str(interface), True, localcmdsudoprefix +
                      "ifconfig tun%s up" % interface)
 
     # Provision interface
-    runsystemcommand("Assigning interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2", True,
-                     localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
+    runsyscmd("Assigning interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2", True,
+              localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
     time.sleep(2)
 
     # Establish tunnel interface
     sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
-             "ServerAliveInterval=50 root@%s &" % \
+             "ServerAliveInterval=50 ubuntu@%s &" % \
              (homeDir, keyName, interface, interface, host)
     debug("SHELL CMD (remote): " + sshcmd)
     retry_cnt = 0
@@ -818,35 +805,35 @@ for host in allInstances:
     interface = interface + 1
 
     # add entry to table
-    address_to_tunnel[str(host)] = str(interface - 1)
+    address_to_tunnel[str(host)] = str(interface-1)
 
 # setup local forwarding
-runsystemcommand("Enabling local ip forwarding", True, "echo 1 | " + localcmdsudoprefix +
+runsyscmd("Enabling local ip forwarding", True, "echo 1 | " + localcmdsudoprefix +
                  "tee -a /proc/sys/net/ipv4/ip_forward")
 
 # Save iptables
-runsystemcommand("Saving the current local IP tables state", True, localcmdsudoprefix +
+runsyscmd("Saving the current local IP tables state", True, localcmdsudoprefix +
                  "/sbin/iptables-save > /tmp/%s" % iptablesName)
 
 # Flush existing rules (1 of 3)
-runsystemcommand("Flushing existing local iptables nat rules", True, localcmdsudoprefix + "iptables -t nat -F")
+runsyscmd("Flushing existing local iptables nat rules", True, localcmdsudoprefix + "iptables -t nat -F")
 
 # Flush existing rules (2 of 3)
-runsystemcommand("Flushing existing local iptables mangle rules", True, localcmdsudoprefix + "iptables -t mangle -F")
+runsyscmd("Flushing existing local iptables mangle rules", True, localcmdsudoprefix + "iptables -t mangle -F")
 
 # Flush existing rules (3 of 3)
-runsystemcommand("Flushing all remaining local iptables rules", True, localcmdsudoprefix + "iptables -F")
+runsyscmd("Flushing all remaining local iptables rules", True, localcmdsudoprefix + "iptables -F")
 
 # Allow local connections to RFC1918 (1 of 3)
-runsystemcommand("Allowing local connections to RFC1918 (1 of 3)", True, localcmdsudoprefix +
+runsyscmd("Allowing local connections to RFC1918 (1 of 3)", True, localcmdsudoprefix +
                  "iptables -t nat -I POSTROUTING -d 192.168.0.0/16 -j RETURN")
 
 # Allow local connections to RFC1918 (2 of 3)
-runsystemcommand("Allowing local connections to RFC1918 (2 of 3)", True, localcmdsudoprefix +
+runsyscmd("Allowing local connections to RFC1918 (2 of 3)", True, localcmdsudoprefix +
                  "iptables -t nat -I POSTROUTING -d 172.16.0.0/16 -j RETURN")
 
 # Allow local connections to RFC1918 (3 of 3)
-runsystemcommand("Allowing local connections to RFC1918 (3 of 3)", True, localcmdsudoprefix +
+runsyscmd("Allowing local connections to RFC1918 (3 of 3)", True, localcmdsudoprefix +
                  "iptables -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
 
 count = args.num_of_instances
@@ -854,11 +841,11 @@ interface = 1
 nexthopcmd = "ip route add default scope global "
 for host in allInstances:
     # Allow connections to our proxy servers
-    runsystemcommand("Allowing connections to our proxy servers", True, localcmdsudoprefix +
+    runsyscmd("Allowing connections to our proxy servers", True, localcmdsudoprefix +
                      "iptables -t nat -I POSTROUTING -d %s -j RETURN" % host)
 
     # NAT outbound traffic going through our tunnels
-    runsystemcommand("NAT outbound traffic so that it goes through our tunnels", True, localcmdsudoprefix +
+    runsyscmd("NAT outbound traffic so that it goes through our tunnels", True, localcmdsudoprefix +
                      "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " % (interface - 1))
 
     # Build round robin route table command
@@ -866,14 +853,14 @@ for host in allInstances:
         interface - 1) + " weight 1 "
 
     # Add static routes for our SSH tunnels
-    runsystemcommand("Adding static routes for our SSH tunnels", True, localcmdsudoprefix +
+    runsyscmd("Adding static routes for our SSH tunnels", True, localcmdsudoprefix +
                      "ip route add %s via %s dev %s" % (host, defaultgateway, networkInterface))
 
     interface = interface + 1
     count = count - 1
 
 # Replace default route with the new default route
-runsystemcommand("Replace default route with the new default route", True, localcmdsudoprefix + "%s" % nexthopcmd)
+runsyscmd("Replace default route with the new default route", True, localcmdsudoprefix + "%s" % nexthopcmd)
 
 success("Done!")
 print("\n++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
