@@ -16,6 +16,7 @@ import time
 from subprocess import run
 import boto.ec2
 import netifaces as netifaces
+import random
 
 
 class bcolors:
@@ -127,6 +128,11 @@ def cleanup(proxy=None, cannon=None):
         # Delete local routes
         run_sys_cmd("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
                     "route del %s dev %s" % (host, networkInterface))
+
+        # Killing ssh tunnel
+        run_sys_cmd("Killing ssh tunnel", True, localcmdsudoprefix +
+                    "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host)
+
         # Destroying local tun interfaces
         run_sys_cmd("Destroying local tun interfaces", True, localcmdsudoprefix +
                     "ip tuntap del dev tun%s mode tun" % int(ip_to_tunnelid_map[str(host)]))
@@ -363,7 +369,7 @@ def rotate_host(instance):
     debug('SHELL CMD (remote): %s' % sshcmd)
     retry_cnt = 0
     while retry_cnt < 6:
-        retcode = run(sshcmd, shell=True)
+        retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
         if retcode.returncode != 0:
             warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
                 swapped_ip, ip_to_tunnelid_map[str(host)]))
@@ -428,7 +434,22 @@ def rotate_host(instance):
 # Perform cache-busting on ECMP routing
 #############################################################################################
 def cache_bust():
-    pass
+    # Rebuild Route table
+    route_interface = 0
+    nexthopcmd = "ip route replace default scope global "
+    weights = range(1, args.num_of_instances + 1)
+    debug("The range of weights to give to routes are: %s" % str(weights))
+    random_weights = random.sample(weights, args.num_of_instances)
+    debug("The route weights have been ordered as: %s" % str(random_weights))
+    while route_interface < args.num_of_instances:
+        # generate a random int between 1 and the num of interfaces +1 to be the weight of the route as this is using
+        # random.sample the values should not be repeated and we will never have ECMP routing
+        nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight %s " % \
+                     (route_interface, route_interface, random_weights[int(route_interface)])
+        # we do random route weight here to force variation in the use of the multipath routes
+        route_interface = route_interface + 1
+    run_sys_cmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
+    run_sys_cmd("Flushing route cache", True, localcmdsudoprefix + 'ip route flush cache')
 
 
 #############################################################################################
@@ -591,7 +612,7 @@ def main():
         debug("SHELL CMD (remote): " + sshcmd)
         retry_cnt = 0
         while retry_cnt < 6:
-            retcode = run(sshcmd, shell=True)
+            retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
             if retcode != 0:
                 warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
                 retry_cnt = retry_cnt + 1
@@ -682,7 +703,7 @@ parser.add_argument('-t', '--image-type', nargs='?', default='t2.nano',
 parser.add_argument('--region', nargs='?', default='us-east-1',
                     help="Select the region: Example: us-east-1. If not set, defaults to us-east-1.")
 parser.add_argument('-r', action='store_true', help="Enable Rotating AMI hosts.")
-parser.add_argument('-cb', action='store_true', help="Enable multipath cache busting.")
+parser.add_argument('-b', action='store_true', help="Enable multipath cache busting.")
 parser.add_argument('-v', action='store_true', help="Enable verbose logging. All cmd's should be printed to stdout")
 parser.add_argument('num_of_instances', type=int, help="The number of amazon instances you'd like to launch.")
 parser.add_argument('--name', nargs="?", help="Set the name of the instance in the cluster")
@@ -826,6 +847,8 @@ if __name__ == '__main__':
             # loop round detected instances of each reservation
             for instance in rotate_reservations:
                 rotate_host(instance)
-        if args.cb:
+        if args.b:
             success("Performing multipath cache bust")
             cache_bust()
+        # the below sleep is just to stop wild things from happening until proper timing control is implemented.
+        time.sleep(5)
