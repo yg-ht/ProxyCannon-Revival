@@ -124,11 +124,17 @@ def cleanup(proxy=None, cannon=None):
     # Cleaning routes
     success("Correcting Routes.....")
     for host in all_instances:
+        # Delete local routes
         run_sys_cmd("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
                     "route del %s dev %s" % (host, networkInterface))
-    run_sys_cmd("Delete the default route", True, localcmdsudoprefix + "ip route del default")
-    run_sys_cmd("Adding default route", True, localcmdsudoprefix + "ip route add default via %s dev %s" %
+        # Destroying local tun interfaces
+        run_sys_cmd("Destroying local tun interfaces", True, localcmdsudoprefix +
+                    "ip tuntap del dev tun%s mode tun" % int(ip_to_tunnelid_map[str(host)]))
+
+    # Replace the custom default route with one that makes sense
+    run_sys_cmd("Adding default route", True, localcmdsudoprefix + "ip route replace default via %s dev %s" %
                 (defaultgateway, networkInterface))
+
 
     # Terminate instance
     success("Terminating Instances.....")
@@ -229,9 +235,9 @@ def rotate_host(instance):
     nexthopcmd = "ip route replace default scope global "
     route_interface = 0
     while route_interface < args.num_of_instances:
-        if int(route_interface) != int(address_to_tunnel[str(host)]):
+        if int(route_interface) != int(ip_to_tunnelid_map[str(host)]):
             nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + ".254.1 dev tun" + \
-                         str(route_interface) + " weight 1"
+                         str(route_interface) + " weight 1 "
             # As we are using multipath routing and will do route cache-busting elsewhere
             # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
         route_interface = route_interface + 1
@@ -273,7 +279,7 @@ def rotate_host(instance):
 
     # Remove NAT outbound traffic going through our tunnels
     run_sys_cmd("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
-                "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % address_to_tunnel[str(host)])
+                "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % ip_to_tunnelid_map[str(host)])
 
     # Remove Static Route to EC2 Host
     run_sys_cmd("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % host)
@@ -294,7 +300,6 @@ def rotate_host(instance):
         cleanup()
     debug("Temporary Elastic IP address: " + temporary_address.public_ip)
 
-    time.sleep(5)
     # Associating new temporary address
     rotate_conn.associate_address(instance.id, temporary_address.public_ip)
 
@@ -354,14 +359,14 @@ def rotate_host(instance):
     # Establish tunnel interface
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
              "ServerAliveInterval=50 ubuntu@%s &" % (
-                 homeDir, keyName, address_to_tunnel[str(host)], address_to_tunnel[str(host)], swapped_ip)
+        homeDir, keyName, ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)], swapped_ip)
     debug('SHELL CMD (remote): %s' % sshcmd)
     retry_cnt = 0
     while retry_cnt < 6:
-        retcode = run(sshcmd, shell=True, capture_output=True, text=True)
+        retcode = run(sshcmd, shell=True)
         if retcode.returncode != 0:
             warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
-                swapped_ip, address_to_tunnel[str(host)]))
+                swapped_ip, ip_to_tunnelid_map[str(host)]))
             debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
             retry_cnt = retry_cnt + 1
             time.sleep(1 + int(retry_cnt))
@@ -374,21 +379,21 @@ def rotate_host(instance):
     # Provision remote tun interface
     run_sys_cmd("Setting IP on remote tun adapter", False, sshbasecmd +
                 "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
-                (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+                (ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)]))
 
     # Add return route back to us
     run_sys_cmd("Adding return route back to us", False, sshbasecmd +
                 "'sudo route add 10.%s.254.2 dev tun%s'" %
-                (address_to_tunnel[str(host)], address_to_tunnel[str(host)]))
+                (ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)]))
 
     # Turn up our interface
     run_sys_cmd("Turn up our interface", True, localcmdsudoprefix +
-                "ifconfig tun%s up" % address_to_tunnel[str(host)])
+                "ifconfig tun%s up" % ip_to_tunnelid_map[str(host)])
 
     # Provision interface
     run_sys_cmd("Provision interface", True, localcmdsudoprefix +
-                "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (address_to_tunnel[str(host)],
-                                                                        address_to_tunnel[str(host)]))
+                "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (ip_to_tunnelid_map[str(host)],
+                                                                        ip_to_tunnelid_map[str(host)]))
     time.sleep(2)
 
     # Allow local connections to the proxy server
@@ -398,7 +403,7 @@ def rotate_host(instance):
     # NAT outbound traffic going through our tunnels
     run_sys_cmd("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
                 "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
-                address_to_tunnel[str(host)])
+                ip_to_tunnelid_map[str(host)])
 
     # Rebuild Route table
     route_interface = 0
@@ -414,9 +419,9 @@ def rotate_host(instance):
     # print address_to_tunnel
     log(str(swapped_ip))
 
-    # Removing from local dict
-    address_to_tunnel[str(swapped_ip)] = address_to_tunnel[str(host)]
-    del address_to_tunnel[str(host)]
+    # reassigning the tunnel ID to the new IP address
+    ip_to_tunnelid_map[str(swapped_ip)] = ip_to_tunnelid_map[str(host)]
+    del ip_to_tunnelid_map[str(host)]
 
 
 #############################################################################################
@@ -586,7 +591,7 @@ def main():
         debug("SHELL CMD (remote): " + sshcmd)
         retry_cnt = 0
         while retry_cnt < 6:
-            retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
+            retcode = run(sshcmd, shell=True)
             if retcode != 0:
                 warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
                 retry_cnt = retry_cnt + 1
@@ -601,7 +606,7 @@ def main():
         interface = interface + 1
 
         # add entry to table
-        address_to_tunnel[str(host)] = str(interface - 1)
+        ip_to_tunnelid_map[str(host)] = str(interface - 1)
 
     # setup local forwarding
     run_sys_cmd("Enabling local ip forwarding", True, "echo 1 | " + localcmdsudoprefix +
@@ -691,7 +696,7 @@ args = parser.parse_args()
 homeDir = os.getenv("HOME")
 FNULL = open(os.devnull, 'w')
 debug("Homedir: " + homeDir)
-address_to_tunnel = {}
+ip_to_tunnelid_map = {}
 
 #############################################################################################
 # Sanity Checks and set up
