@@ -51,7 +51,7 @@ def debug(msg):
 #############################################################################################
 # Run system commands (outside of Python)
 #############################################################################################
-def run_sys_cmd(description, islocal, cmd):
+def run_sys_cmd(description, islocal, cmd, reportErrors=True):
     if islocal:
         target = 'local'
     else:
@@ -59,7 +59,7 @@ def run_sys_cmd(description, islocal, cmd):
     debug(description)
     debug("SHELL CMD (%s): %s" % (target, cmd))
     retcode = run(cmd, shell=True, capture_output=True, text=True)
-    if retcode.returncode != 0:
+    if retcode.returncode != 0 and reportErrors:
         error("Failure: %s" % description)
         debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
         warning("Continue? (y/n)")
@@ -116,28 +116,27 @@ def cleanup(proxy=None, cannon=None):
                 all_instances.append(instance.ip_address)
     debug("Public IP's for all instances: " + str(all_instances))
 
+    # Cleaning up per-host aspects
+    success("Cleaning local config per remote host.....")
+    for host in all_instances:
+        # Killing ssh tunnel
+        run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk {'print $2'})" % host, False)
+
+        # Delete local routes
+        run_sys_cmd("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
+                    "route del %s dev %s" % (host, networkInterface))
+
+        # Destroying local tun interfaces
+        run_sys_cmd("Destroying local tun interfaces", True, localcmdsudoprefix +
+                    "ip tuntap del dev tun%s mode tun" % int(ip_to_tunnelid_map[str(host)]))
+
     # Flush iptables
     run_sys_cmd("Flushing iptables NAT chain", True, "%s iptables -t nat -F" % localcmdsudoprefix)
     run_sys_cmd("Flushing remaining iptables state", True, "%s iptables -F" % localcmdsudoprefix)
     run_sys_cmd("Restoring old iptables state", True, "%s iptables-restore  < /tmp/%s" %
                 (localcmdsudoprefix, iptablesName))
 
-    # Cleaning routes
-    success("Correcting Routes.....")
-    for host in all_instances:
-        # Delete local routes
-        run_sys_cmd("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
-                    "route del %s dev %s" % (host, networkInterface))
-
-        # Killing ssh tunnel
-        run_sys_cmd("Killing ssh tunnel", True, localcmdsudoprefix +
-                    "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host)
-
-        # Destroying local tun interfaces
-        run_sys_cmd("Destroying local tun interfaces", True, localcmdsudoprefix +
-                    "ip tuntap del dev tun%s mode tun" % int(ip_to_tunnelid_map[str(host)]))
-
-    # Replace the custom default route with one that makes sense
+    # Replace the custom default route with a standard one that makes sense
     run_sys_cmd("Adding default route", True, localcmdsudoprefix + "ip route replace default via %s dev %s" %
                 (defaultgateway, networkInterface))
 
@@ -276,8 +275,7 @@ def rotate_host(instance):
             break
 
     # Killing ssh tunnel
-    run_sys_cmd("Killing ssh tunnel", True, localcmdsudoprefix +
-                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host)
+    run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host, False)
 
     # Remove iptables rule allowing SSH to EC2 Host
     run_sys_cmd("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
@@ -312,7 +310,7 @@ def rotate_host(instance):
     # At this point, your VM should respond on its public ip address.
     # NOTE: It may take up to 60 seconds for the temporary Elastic IP address to begin working
     debug("Sleeping for 30s to allow for new temporary IP to take effect")
-    time.sleep(30)
+    #time.sleep(30)
 
     # Remove temporary IP association forcing a new permanent public IP
     try:
@@ -321,7 +319,7 @@ def rotate_host(instance):
         error("Failed to disassociate the address " + str(temporary_address.public_ip) + " because: " + str(e))
         cleanup()
     debug("Sleeping for 60s to allow for new permanent IP to take effect")
-    time.sleep(60)
+    #time.sleep(60)
 
     # Return the temporary IP address back to address pool
     try:
@@ -370,10 +368,9 @@ def rotate_host(instance):
     retry_cnt = 0
     while retry_cnt < 6:
         retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
-        if retcode.returncode != 0:
+        if retcode != 0:
             warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
                 swapped_ip, ip_to_tunnelid_map[str(host)]))
-            debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
             retry_cnt = retry_cnt + 1
             time.sleep(1 + int(retry_cnt))
         else:
