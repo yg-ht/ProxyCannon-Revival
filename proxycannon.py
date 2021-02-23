@@ -449,7 +449,11 @@ def cache_bust(show_log=True):
                      (route_interface, route_interface, random_weights[int(route_interface)])
         # we do random route weight here to force variation in the use of the multipath routes
         route_interface = route_interface + 1
-    run_sys_cmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd, show_log=show_log)
+    run_sys_cmd("Insert custom route", True, localcmdsudoprefix + nexthopcmd, show_log=show_log)
+    # sleep for half a second to help ensure the subsequent cache flush doesn't happen before the route as been applied
+    # there is apparent bias in this mechanism for one route over the others and it isn't clear as to what the cause is
+    # hoping that it is just a race condition
+    time.sleep(0.5)
     run_sys_cmd("Flushing route cache", True, localcmdsudoprefix + 'ip route flush cache', show_log=show_log)
 
 
