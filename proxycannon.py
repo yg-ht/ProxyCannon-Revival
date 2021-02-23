@@ -17,6 +17,7 @@ from subprocess import run
 import boto.ec2
 import netifaces as netifaces
 import random
+import threading
 
 
 class bcolors:
@@ -51,15 +52,17 @@ def debug(msg):
 #############################################################################################
 # Run system commands (outside of Python)
 #############################################################################################
-def run_sys_cmd(description, islocal, cmd, reportErrors=True):
+def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
     if islocal:
         target = 'local'
     else:
         target = 'remote'
-    debug(description)
-    debug("SHELL CMD (%s): %s" % (target, cmd))
+    if show_log:
+        debug(description)
+    if show_log:
+        debug("SHELL CMD (%s): %s" % (target, cmd))
     retcode = run(cmd, shell=True, capture_output=True, text=True)
-    if retcode.returncode != 0 and reportErrors:
+    if retcode.returncode != 0 and report_errors:
         error("Failure: %s" % description)
         debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
         warning("Continue? (y/n)")
@@ -73,7 +76,8 @@ def run_sys_cmd(description, islocal, cmd, reportErrors=True):
                 cleanup()
                 exit("Cleaning complete, shutting down")
     else:
-        success("Success: %s" % description)
+        if show_log:
+            success("Success: %s" % description)
         return retcode.stdout
 
 
@@ -140,7 +144,6 @@ def cleanup(proxy=None, cannon=None):
     run_sys_cmd("Adding default route", True, localcmdsudoprefix + "ip route replace default via %s dev %s" %
                 (defaultgateway, networkInterface))
 
-
     # Terminate instance
     success("Terminating Instances.....")
     for instance in cleanup_instances:
@@ -185,7 +188,6 @@ def cleanup(proxy=None, cannon=None):
 #############################################################################################
 # Connect to AWS EC2
 #############################################################################################
-
 def connect_to_ec2():
     EC2conn = None
     try:
@@ -310,7 +312,7 @@ def rotate_host(instance):
     # At this point, your VM should respond on its public ip address.
     # NOTE: It may take up to 60 seconds for the temporary Elastic IP address to begin working
     debug("Sleeping for 30s to allow for new temporary IP to take effect")
-    #time.sleep(30)
+    time.sleep(30)
 
     # Remove temporary IP association forcing a new permanent public IP
     try:
@@ -319,7 +321,7 @@ def rotate_host(instance):
         error("Failed to disassociate the address " + str(temporary_address.public_ip) + " because: " + str(e))
         cleanup()
     debug("Sleeping for 60s to allow for new permanent IP to take effect")
-    #time.sleep(60)
+    time.sleep(60)
 
     # Return the temporary IP address back to address pool
     try:
@@ -363,7 +365,7 @@ def rotate_host(instance):
     # Establish tunnel interface
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
              "ServerAliveInterval=50 ubuntu@%s &" % (
-        homeDir, keyName, ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)], swapped_ip)
+                 homeDir, keyName, ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)], swapped_ip)
     debug('SHELL CMD (remote): %s' % sshcmd)
     retry_cnt = 0
     while retry_cnt < 6:
@@ -430,14 +432,16 @@ def rotate_host(instance):
 #############################################################################################
 # Perform cache-busting on ECMP routing
 #############################################################################################
-def cache_bust():
+def cache_bust(show_log=True):
     # Rebuild Route table
     route_interface = 0
     nexthopcmd = "ip route replace default scope global "
     weights = range(1, args.num_of_instances + 1)
-    debug("The range of weights to give to routes are: %s" % str(weights))
+    if show_log:
+        debug("The range of weights to give to routes are: %s" % str(weights))
     random_weights = random.sample(weights, args.num_of_instances)
-    debug("The route weights have been ordered as: %s" % str(random_weights))
+    if show_log:
+        debug("The route weights have been ordered as: %s" % str(random_weights))
     while route_interface < args.num_of_instances:
         # generate a random int between 1 and the num of interfaces +1 to be the weight of the route as this is using
         # random.sample the values should not be repeated and we will never have ECMP routing
@@ -445,8 +449,17 @@ def cache_bust():
                      (route_interface, route_interface, random_weights[int(route_interface)])
         # we do random route weight here to force variation in the use of the multipath routes
         route_interface = route_interface + 1
-    run_sys_cmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd)
-    run_sys_cmd("Flushing route cache", True, localcmdsudoprefix + 'ip route flush cache')
+    run_sys_cmd("Insert custom route command", True, localcmdsudoprefix + nexthopcmd, show_log=show_log)
+    run_sys_cmd("Flushing route cache", True, localcmdsudoprefix + 'ip route flush cache', show_log=show_log)
+
+
+#############################################################################################
+# thread_handler for cache_bust to decouple the process flow and the process logic
+#############################################################################################
+def cache_bust_thread_handler():
+    while True:
+        cache_bust(show_log=False)
+        time.sleep(2)
 
 
 #############################################################################################
@@ -831,21 +844,27 @@ signal.signal(signal.SIGINT, cleanup)
 
 if __name__ == '__main__':
     main()
+    # threading is only required for cache_bust() if we are also going to rotate_host()
+    if args.b and args.r:
+        success("Launching multipath cache bust thread")
+        cache_bust_thread = threading.Thread(target=cache_bust_thread_handler, daemon=True)
+        cache_bust_thread.start()
     while True:
+        # handle cache_bust() if not running rotate_host()
+        if args.b and not args.r:
+            cache_bust()
+        # handle rotate_host() in any circumstance
         if args.r:
             success("Rotating infrastructure IPs.")
-            # connect to EC2
+            # connect to EC2 (presumably in case it closed since tool launch?)
             rotate_conn = connect_to_ec2()
 
             # return list of reservations
-            rotate_reservations = rotate_conn.get_only_instances(filters={"tag:Name": nameTag,
-                                                                          "instance-state-name": "running"})
+            rotate_instances = rotate_conn.get_only_instances(filters={"tag:Name": nameTag,
+                                                                       "instance-state-name": "running"})
 
             # loop round detected instances of each reservation
-            for instance in rotate_reservations:
+            for instance in rotate_instances:
                 rotate_host(instance)
-        if args.b:
-            success("Performing multipath cache bust")
-            cache_bust()
         # the below sleep is just to stop wild things from happening until proper timing control is implemented.
         time.sleep(5)
