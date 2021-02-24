@@ -97,8 +97,50 @@ def log(msg):
 # Handle SigTerm & Clean up
 #############################################################################################
 def cleanup(proxy=None, cannon=None):
-    # Time to clean up
-    print("\n")
+
+    #############################################################################################
+    # Cleaning up per-host aspects
+    #############################################################################################
+    success("\nCleaning local config per remote host.....")
+    for tunnel_id, tunnel in tunnels.items():
+        # Killing ssh tunnel
+        run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk {'print $2'})" % tunnel['pub_ip'], False)
+
+        # Delete local routes
+        run_sys_cmd("Delete route %s dev %s" % (tunnel['pub_ip'], networkInterface), True, localcmdsudoprefix +
+                    "route del %s dev %s" % (tunnel['pub_ip'], networkInterface))
+
+        # Destroying local tun interfaces
+        run_sys_cmd("Destroying local tun interfaces", True, localcmdsudoprefix +
+                    "ip tuntap del dev tun%s mode tun" % tunnel_id)
+
+    #############################################################################################
+    # Cleaning up local aspects
+    #############################################################################################
+
+    # Flush iptables
+    run_sys_cmd("Flushing iptables NAT chain", True, "%s iptables -t nat -F" % localcmdsudoprefix)
+    run_sys_cmd("Flushing remaining iptables state", True, "%s iptables -F" % localcmdsudoprefix)
+    run_sys_cmd("Restoring old iptables state", True, "%s iptables-restore  < /tmp/%s" %
+                (localcmdsudoprefix, iptablesName))
+
+    # Replace the custom default route with a standard one that makes sense
+    run_sys_cmd("Re-adding normal default route", True, localcmdsudoprefix + "ip route replace default via %s dev %s" %
+                (defaultgateway, networkInterface))
+
+    # Remove local ssh key
+    run_sys_cmd("Remove local ssh key", True, "rm -f %s/.ssh/%s.pem" % (homeDir, keyName))
+
+    # Remove local IP forwarding
+    run_sys_cmd("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | "
+                + localcmdsudoprefix + "tee -a /proc/sys/net/ipv4/ip_forward")
+
+    # remove iptables saved config
+    run_sys_cmd("Removing local iptables save state", True, localcmdsudoprefix + "rm -rf  /tmp/%s" + iptablesName)
+
+    #############################################################################################
+    # Cleaning up cloud aspects
+    #############################################################################################
 
     # Connect to EC2 and return list of reservations
     cleanup_conn = None
@@ -109,45 +151,13 @@ def cleanup(proxy=None, cannon=None):
         error("Failed to connect to Amazon EC2 because: %s" % e)
         exit(2)
 
+    debug("Getting objects ready for termination at the cloud")
     cleanup_instances = cleanup_conn.get_only_instances(
         filters={"tag:Name": nameTag, "instance-state-name": "running"})
-
-    # Grab list of public IP's assigned to instances that were launched
-    all_instances = []
-    for instance in cleanup_instances:
-        if instance.ip_address not in all_instances:
-            if instance.ip_address:
-                all_instances.append(instance.ip_address)
-    debug("Public IP's for all instances: " + str(all_instances))
-
-    # Cleaning up per-host aspects
-    success("Cleaning local config per remote host.....")
-    for host in all_instances:
-        # Killing ssh tunnel
-        run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk {'print $2'})" % host, False)
-
-        # Delete local routes
-        run_sys_cmd("Delete route %s dev %s" % (host, networkInterface), True, localcmdsudoprefix +
-                    "route del %s dev %s" % (host, networkInterface))
-
-        # Destroying local tun interfaces
-        run_sys_cmd("Destroying local tun interfaces", True, localcmdsudoprefix +
-                    "ip tuntap del dev tun%s mode tun" % int(ip_to_tunnelid_map[str(host)]))
-
-    # Flush iptables
-    run_sys_cmd("Flushing iptables NAT chain", True, "%s iptables -t nat -F" % localcmdsudoprefix)
-    run_sys_cmd("Flushing remaining iptables state", True, "%s iptables -F" % localcmdsudoprefix)
-    run_sys_cmd("Restoring old iptables state", True, "%s iptables-restore  < /tmp/%s" %
-                (localcmdsudoprefix, iptablesName))
-
-    # Replace the custom default route with a standard one that makes sense
-    run_sys_cmd("Adding default route", True, localcmdsudoprefix + "ip route replace default via %s dev %s" %
-                (defaultgateway, networkInterface))
-
-    # Terminate instance
+    # Terminate instances
     success("Terminating Instances.....")
     for instance in cleanup_instances:
-        debug("Attempting to terminate instance: %s" % str(instance))
+        debug("Attempting to terminate instance: %s" % str(instance.id))
         instance.terminate()
 
     warning("Pausing for 90 seconds so instances can properly terminate.....")
@@ -166,16 +176,6 @@ def cleanup(proxy=None, cannon=None):
         cleanup_conn.delete_key_pair(key_name=keyName)
     except Exception as e:
         error("Deletion of key pair failed because %s" % e)
-
-    # Remove local ssh key
-    run_sys_cmd("Remove local ssh key", True, "rm -f %s/.ssh/%s.pem" % (homeDir, keyName))
-
-    # Remove local routing
-    run_sys_cmd("Disable local IP forwarding", True, localcmdsudoprefix + "echo 0 | "
-                + localcmdsudoprefix + "tee -a /proc/sys/net/ipv4/ip_forward")
-
-    # remove iptables saved config
-    run_sys_cmd("Removing local iptables save state", True, localcmdsudoprefix + "rm -rf  /tmp/%s" + iptablesName)
 
     # Log then close
     log("ProxyCannon-Temp Finished.")
@@ -212,9 +212,11 @@ def connect_to_ec2():
 #############################################################################################
 # Rotate Hosts
 #############################################################################################
-def rotate_host(instance):
-    host = instance.ip_address
-    debug("Rotating IP for: " + str(host))
+def rotate_host(tunnel_id, tunnel):
+    # connect to EC2 (presumably in case it closed since tool launch?)
+    rotate_conn = connect_to_ec2()
+
+    debug("Rotating IP for: %s" % tunnel['pub_ip'])
 
     #########################################################################################
     # Identify the instances so we can create routing tables for tear down
@@ -242,9 +244,9 @@ def rotate_host(instance):
     nexthopcmd = "ip route replace default scope global "
     route_interface = 0
     while route_interface < args.num_of_instances:
-        if int(route_interface) != int(ip_to_tunnelid_map[str(host)]):
-            nexthopcmd = nexthopcmd + "nexthop via 10." + str(route_interface) + ".254.1 dev tun" + \
-                         str(route_interface) + " weight 1 "
+        # don't include the host we are tearing down in the multipath routing
+        if route_interface != tunnel_id:
+            nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % (route_interface, route_interface)
             # As we are using multipath routing and will do route cache-busting elsewhere
             # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
         route_interface = route_interface + 1
@@ -260,7 +262,7 @@ def rotate_host(instance):
         # netstat -ant | grep ESTABLISHED | grep x.x.x.x | awk '{print $2$3}'
         p1 = subprocess.Popen(['netstat', '-ant'], stdout=subprocess.PIPE)
         p2 = subprocess.Popen(['grep', 'ESTABLISHED'], stdin=p1.stdout, stdout=subprocess.PIPE)
-        p3 = subprocess.Popen(['grep', host], stdin=p2.stdout, stdout=subprocess.PIPE)
+        p3 = subprocess.Popen(['grep', tunnel['pub_ip']], stdin=p2.stdout, stdout=subprocess.PIPE)
         awkcmd = ['awk', '{print $2$3}']  # had some problems escaping the single quotes, went with this
         p4 = subprocess.Popen(awkcmd, stdin=p3.stdout, stdout=subprocess.PIPE)
         stat, err = p4.communicate()
@@ -277,18 +279,19 @@ def rotate_host(instance):
             break
 
     # Killing ssh tunnel
-    run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % host, False)
+    run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % tunnel['pub_ip'],
+                False)
 
     # Remove iptables rule allowing SSH to EC2 Host
     run_sys_cmd("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
-                "iptables -t nat -D POSTROUTING -d %s -j RETURN" % host)
+                "iptables -t nat -D POSTROUTING -d %s -j RETURN" % tunnel['pub_ip'])
 
     # Remove NAT outbound traffic going through our tunnels
     run_sys_cmd("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
-                "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % ip_to_tunnelid_map[str(host)])
+                "iptables -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % tunnel_id)
 
     # Remove Static Route to EC2 Host
-    run_sys_cmd("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % host)
+    run_sys_cmd("Remove Static Route to EC2 Host", True, localcmdsudoprefix + "ip route del %s" % tunnel['pub_ip'])
 
     #########################################################################################
     # Reconfigure EC2
@@ -298,6 +301,7 @@ def rotate_host(instance):
     # and then release the temporary IP to be given a permanent public IP.  Bit hacky, but works.
 
     # Requesting new IP allocation
+    debug("Requsting new temporary Elastic IP address... This can take a while")
     temporary_address = None
     try:
         temporary_address = rotate_conn.allocate_address()
@@ -307,7 +311,7 @@ def rotate_host(instance):
     debug("Temporary Elastic IP address: " + temporary_address.public_ip)
 
     # Associating new temporary address
-    rotate_conn.associate_address(instance.id, temporary_address.public_ip)
+    rotate_conn.associate_address(tunnel['cloud_id'], temporary_address.public_ip)
 
     # At this point, your VM should respond on its public ip address.
     # NOTE: It may take up to 60 seconds for the temporary Elastic IP address to begin working
@@ -330,13 +334,15 @@ def rotate_host(instance):
         error("Failed to release the address " + str(temporary_address.public_ip) + " because: " + str(e))
         cleanup()
 
+    debug("Rotate host completed for tun%s" % tunnel_id)
+
     #########################################################################################
     # Identify the instances so we can create routing tables for stand up
     #########################################################################################
 
     # Connect to EC2 and get list of instances
-    ip_list_conn = connect_to_ec2()
-    ip_list_instances = ip_list_conn.get_only_instances(
+    debug("Refreshing our local list of instances from the cloud provider to identify new permanent IP")
+    ip_list_instances = rotate_conn.get_only_instances(
         filters={"tag:Name": nameTag, "instance-state-name": "running"})
 
     # Grab list of public IP's assigned to instances that were launched
@@ -365,14 +371,14 @@ def rotate_host(instance):
     # Establish tunnel interface
     sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
              "ServerAliveInterval=50 ubuntu@%s &" % (
-                 homeDir, keyName, ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)], swapped_ip)
+                 homeDir, keyName, tunnel_id, tunnel_id, swapped_ip)
     debug('SHELL CMD (remote): %s' % sshcmd)
     retry_cnt = 0
     while retry_cnt < 6:
         retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
         if retcode != 0:
             warning("Failed to establish tunnel with %s (tun%s). Retrying..." % (
-                swapped_ip, ip_to_tunnelid_map[str(host)]))
+                swapped_ip, tunnel_id))
             retry_cnt = retry_cnt + 1
             time.sleep(1 + int(retry_cnt))
         else:
@@ -384,21 +390,21 @@ def rotate_host(instance):
     # Provision remote tun interface
     run_sys_cmd("Setting IP on remote tun adapter", False, sshbasecmd +
                 "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
-                (ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)]))
+                (tunnel_id, tunnel_id))
 
     # Add return route back to us
     run_sys_cmd("Adding return route back to us", False, sshbasecmd +
                 "'sudo route add 10.%s.254.2 dev tun%s'" %
-                (ip_to_tunnelid_map[str(host)], ip_to_tunnelid_map[str(host)]))
+                (tunnel_id, tunnel_id))
 
     # Turn up our interface
     run_sys_cmd("Turn up our interface", True, localcmdsudoprefix +
-                "ifconfig tun%s up" % ip_to_tunnelid_map[str(host)])
+                "ifconfig tun%s up" % tunnel_id)
 
     # Provision interface
     run_sys_cmd("Provision interface", True, localcmdsudoprefix +
-                "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (ip_to_tunnelid_map[str(host)],
-                                                                        ip_to_tunnelid_map[str(host)]))
+                "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (tunnel_id,
+                                                                        tunnel_id))
     time.sleep(2)
 
     # Allow local connections to the proxy server
@@ -408,7 +414,7 @@ def rotate_host(instance):
     # NAT outbound traffic going through our tunnels
     run_sys_cmd("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
                 "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
-                ip_to_tunnelid_map[str(host)])
+                tunnel_id)
 
     # Rebuild Route table
     route_interface = 0
@@ -424,9 +430,8 @@ def rotate_host(instance):
     # print address_to_tunnel
     log(str(swapped_ip))
 
-    # reassigning the tunnel ID to the new IP address
-    ip_to_tunnelid_map[str(swapped_ip)] = ip_to_tunnelid_map[str(host)]
-    del ip_to_tunnelid_map[str(host)]
+    # updating the internal data structure so that this tunnel_id has the new IP address
+    tunnels[tunnel_id]['pub_ip'] = str(swapped_ip)
 
 
 #############################################################################################
@@ -556,43 +561,45 @@ def main():
     debug("Tag Name: " + nameTag)
 
     # Grab list of public IP's assigned to instances that were launched
-    allInstances = []
     instances = conn.get_only_instances(filters={"tag:Name": nameTag, "instance-state-name": "running"})
+    public_ips = ''
+    tunnel_id = 0
     for instance in instances:
-        if instance.ip_address not in allInstances:
-            if instance.ip_address:
-                allInstances.append(instance.ip_address)
-    debug("Public IP's for all instances: " + str(allInstances))
+        tunnels[tunnel_id] = {'cloud_id': instance.id, 'pub_ip': instance.ip_address,
+                              'tunnel_pid': None, 'route_active': False, 'tunnel_active': False}
+        public_ips = public_ips + instance.ip_address + " "
+        tunnel_id += 1
+    debug("Public IP's for all instances: %s" % public_ips)
 
-    interface = 0
     # Create ssh Tunnels for socks proxying
     success("Provisioning Hosts.....")
-    for host in allInstances:
-        log(host)
-        sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (homeDir, keyName, host)
+    for tunnel_id, tunnel in tunnels.items():
+        log(tunnel['pub_ip'])
+        sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (
+        homeDir, keyName, tunnel['pub_ip'])
 
         # Check connectivity and add the host to known_hosts file
-        run_sys_cmd("Checking connectivity via SSH with %s" % host, False, sshbasecmd + "'id'")
+        run_sys_cmd("Checking connectivity via SSH with %s" % tunnel['pub_ip'], False, sshbasecmd + "'id'")
 
         # Enable Tunneling on the remote host
-        run_sys_cmd("Enabling tunneling via SSH on %s" % host, False, sshbasecmd +
+        run_sys_cmd("Enabling tunneling via SSH on %s" % tunnel['pub_ip'], False, sshbasecmd +
                     "'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'")
 
         # Copy Keys
-        run_sys_cmd("Copying ssh keys to from normal user to root user on %s" % host, False, sshbasecmd +
+        run_sys_cmd("Copying ssh keys to from normal user to root user on %s" % tunnel['pub_ip'], False, sshbasecmd +
                     "'sudo cp /home/ubuntu/.ssh/authorized_keys /root/.ssh/'")
 
         # Restarting Service to take new config (you'd think a simple reload would be enough)
-        run_sys_cmd("Restarting Service to take new config on %s" % host, False, sshbasecmd + "'sudo service ssh "
-                                                                                              "restart'")
+        run_sys_cmd("Restarting Service to take new config on %s" % tunnel['pub_ip'], False, sshbasecmd +
+                    "'sudo service ssh restart'")
 
         # Provision interface
-        run_sys_cmd("Provisioning tun%s interface on %s" % (interface, host), False, sshbasecmd +
-                    "'sudo ip tuntap add dev tun%s mode tun'" % interface)
+        run_sys_cmd("Provisioning tun%s interface on %s" % (tunnel_id, tunnel['pub_ip']), False, sshbasecmd +
+                    "'sudo ip tuntap add dev tun%s mode tun'" % tunnel_id)
 
         # Configure interface
-        run_sys_cmd("Configuring tun%s interface on %s" % (interface, host), False, sshbasecmd +
-                    "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (interface, interface))
+        run_sys_cmd("Configuring tun%s interface on %s" % (tunnel_id, tunnel['pub_ip']), False, sshbasecmd +
+                    "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (tunnel_id, tunnel_id))
 
         # Enable forwarding on remote host
         run_sys_cmd("Enable forwarding on remote host", False, sshbasecmd + "'sudo su root -c \"echo 1 > "
@@ -604,44 +611,43 @@ def main():
 
         # Add return route back to us
         run_sys_cmd("Add return route back to us", False, sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
-                    % (interface, interface))
+                    % (tunnel_id, tunnel_id))
 
         # Create tun interface
-        run_sys_cmd("Creating local interface tun%s" % str(interface), True, localcmdsudoprefix +
-                    "ip tuntap add dev tun%s mode tun" % str(interface))
+        run_sys_cmd("Creating local interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
+                    "ip tuntap add dev tun%s mode tun" % str(tunnel_id))
 
         # Turn up our interface
-        run_sys_cmd("Turning up interface tun%s" % str(interface), True, localcmdsudoprefix +
-                    "ifconfig tun%s up" % interface)
+        run_sys_cmd("Turning up interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
+                    "ifconfig tun%s up" % tunnel_id)
 
         # Provision interface
-        run_sys_cmd("Assigning interface tun" + str(interface) + " ip of 10." + str(interface) + ".254.2", True,
-                    localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (interface, interface))
+        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 10." + str(tunnel_id) + ".254.2", True,
+                    localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (tunnel_id, tunnel_id))
         time.sleep(2)
 
         # Establish tunnel interface
         sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
                  "ServerAliveInterval=50 ubuntu@%s &" % \
-                 (homeDir, keyName, interface, interface, host)
+                 (homeDir, keyName, tunnel_id, tunnel_id, tunnel['pub_ip'])
         debug("SHELL CMD (remote): " + sshcmd)
         retry_cnt = 0
         while retry_cnt < 6:
             retcode = subprocess.call(sshcmd, shell=True, stdout=FNULL, stderr=subprocess.STDOUT)
             if retcode != 0:
-                warning("Failed to establish ssh tunnel on %s. Retrying..." % host)
+                warning("Failed to establish ssh tunnel on %s. Retrying..." % tunnel['pub_ip'])
                 retry_cnt = retry_cnt + 1
                 time.sleep(1)
             else:
+                ssh_tunnel_pid = run_sys_cmd('Getting PID of newly created SSH tunnel', True, localcmdsudoprefix +
+                                             "ps -ef | grep ssh | grep %s | awk {'print $2'}" % tunnel['pub_ip'])
+                # add pid entry to table
+                # 'tunnel_pid': None
+                tunnels[tunnel_id]['tunnel_pid'] = str(ssh_tunnel_pid)
                 break
             if retry_cnt == 5:
                 error("Giving up...")
                 cleanup()
-
-        # increment for the next lop iteration
-        interface = interface + 1
-
-        # add entry to table
-        ip_to_tunnelid_map[str(host)] = str(interface - 1)
 
     # setup local forwarding
     run_sys_cmd("Enabling local ip forwarding", True, "echo 1 | " + localcmdsudoprefix +
@@ -672,28 +678,23 @@ def main():
     run_sys_cmd("Allowing local connections to RFC1918 (3 of 3)", True, localcmdsudoprefix +
                 "iptables -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
 
-    count = args.num_of_instances
-    interface = 1
+    # do routing and ip tables for each of the tunnel hosts, including build the ECMP route
     nexthopcmd = "ip route replace default scope global "
-    for host in allInstances:
+    for tunnel_id, tunnel in tunnels.items():
         # Allow connections to our proxy servers
         run_sys_cmd("Allowing connections to our proxy servers", True, localcmdsudoprefix +
-                    "iptables -t nat -I POSTROUTING -d %s -j RETURN" % host)
+                    "iptables -t nat -I POSTROUTING -d %s -j RETURN" % tunnel['pub_ip'])
 
         # NAT outbound traffic going through our tunnels
         run_sys_cmd("NAT outbound traffic so that it goes through our tunnels", True, localcmdsudoprefix +
-                    "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " % (interface - 1))
+                    "iptables -t nat -A POSTROUTING -o tun%s -j MASQUERADE " % tunnel_id)
 
         # Build round robin route table command
-        nexthopcmd = nexthopcmd + "nexthop via 10." + str(interface - 1) + ".254.1 dev tun" + str(
-            interface - 1) + " weight 1 "
+        nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
 
         # Add static routes for our SSH tunnels
         run_sys_cmd("Adding static routes for our SSH tunnels", True, localcmdsudoprefix +
-                    "ip route add %s via %s dev %s" % (host, defaultgateway, networkInterface))
-
-        interface = interface + 1
-        count = count - 1
+                    "ip route add %s via %s dev %s" % (tunnel['pub_ip'], defaultgateway, networkInterface))
 
     # Replace default route with the new default route
     run_sys_cmd("Replace default route with the new default route", True, localcmdsudoprefix + "%s" % nexthopcmd)
@@ -731,7 +732,10 @@ args = parser.parse_args()
 homeDir = os.getenv("HOME")
 FNULL = open(os.devnull, 'w')
 debug("Homedir: " + homeDir)
-ip_to_tunnelid_map = {}
+# define the internal data structure here so that it is globally accessible
+# tunnels[tunnel_id] = {'cloud_id': instance.id, 'pub_ip': instance.ip_address,
+#                                  'tunnel_pid': None, 'route_active': False, 'tunnel_active': False}
+tunnels = {}
 
 #############################################################################################
 # Sanity Checks and set up
@@ -860,15 +864,9 @@ if __name__ == '__main__':
         # handle rotate_host() in any circumstance
         if args.r:
             success("Rotating infrastructure IPs.")
-            # connect to EC2 (presumably in case it closed since tool launch?)
-            rotate_conn = connect_to_ec2()
-
-            # return list of reservations
-            rotate_instances = rotate_conn.get_only_instances(filters={"tag:Name": nameTag,
-                                                                       "instance-state-name": "running"})
 
             # loop round detected instances of each reservation
-            for instance in rotate_instances:
-                rotate_host(instance)
+            for tunnel_id, tunnel in tunnels.items():
+                rotate_host(tunnel_id, tunnel)
         # the below sleep is just to stop wild things from happening until proper timing control is implemented.
         time.sleep(5)
