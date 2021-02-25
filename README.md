@@ -11,6 +11,22 @@ I looked at several existing projects and most seemed massively complex, for exa
 
 But the original was buggy and didn't work...  I fell into the trap of "just doing a quick bit of bugfixing" which turned into a couple of days engineering time.  Yes, I probably could have got one of the other projects online, but no, I didn't realise that until I was far too invested in ProxyCannon-Revival.
 
+## Command-line syntax
+
+````
+-id, default='ami-d05e75b8', Amazon AMI image ID
+-t, default='t2.nano', Amazon AMI image type
+--region, default='us-east-1', Select the region
+-r, Enable Rotating AMI hosts
+-b, Enable multi-path cache busting
+-m, Disable link state monitor
+-v, Enable verbose logging
+--name, Set the name of the instance in the cluster
+-i, default='detect', Interface to use, default will result in detecting the default gateway and using that
+-l, Enable logging of WAN IP's traffic is routed through
+
+num_of_instances, The number of instances you'd like to launch.
+````
 
 ## Install
 
