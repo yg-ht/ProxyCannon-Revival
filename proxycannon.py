@@ -1,9 +1,13 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Original Author: Hans Lakhan
 # Current maintainer: Felix Ryan of You Gotta Hack That
 
 #######################
-
+import sys
+# check Python version is >= 3.5 before we do anything else
+if sys.version_info.major != 3 or sys.version_info.minor < 5:
+    print("This script needs Python >= 3.5.  You are running Python %s" % sys.version)
+    exit()
 import argparse
 import datetime
 import hashlib
@@ -11,7 +15,6 @@ import os
 import re
 import signal
 import subprocess
-import sys
 import time
 from subprocess import run
 import boto.ec2
