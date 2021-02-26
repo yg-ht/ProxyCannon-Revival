@@ -730,11 +730,11 @@ def main():
             homeDir, keyName, tunnel['pub_ip'])
 
         # Enable Tunneling on the remote host
-        run_sys_cmd("Enabling tunneling via SSH on %s" % tunnel['pub_ip'], False, sshbasecmd +
+        run_sys_cmd("Enabling tunneling via SSH on %s (tun%s)" % (tunnel['pub_ip'], tunnel_id), False, sshbasecmd +
                     "'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'")
 
         # Restarting Service to take new config (you'd think a simple reload would be enough)
-        run_sys_cmd("Restarting Service to take new config on %s" % tunnel['pub_ip'], False, sshbasecmd +
+        run_sys_cmd("Restarting Service to take new config on %s (tun%s)" % (tunnel['pub_ip'], tunnel_id), False, sshbasecmd +
                     "'sudo service ssh restart'")
 
         # Provision interface
@@ -746,15 +746,15 @@ def main():
                     "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (tunnel_id, tunnel_id))
 
         # Enable forwarding on remote host
-        run_sys_cmd("Enable forwarding on remote host", False, sshbasecmd + "'sudo su root -c \"echo 1 > "
+        run_sys_cmd("Enable forwarding on remote host (tun%s)" % tunnel_id, False, sshbasecmd + "'sudo su root -c \"echo 1 > "
                                                                             "/proc/sys/net/ipv4/ip_forward\"'")
 
         # Provision iptables on remote host
-        run_sys_cmd("Provision iptables on remote host", False, sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
+        run_sys_cmd("Provision iptables on remote host (tun%s)" % tunnel_id, False, sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
                                                                              "-o eth0 -j MASQUERADE'")
 
         # Add return route back to us
-        run_sys_cmd("Add return route back to us", False, sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
+        run_sys_cmd("Add return route back to us (tun%s)" % tunnel_id, False, sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
                     % (tunnel_id, tunnel_id))
 
         # Create tun interface
