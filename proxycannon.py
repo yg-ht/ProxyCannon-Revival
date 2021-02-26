@@ -4,6 +4,7 @@
 
 #######################
 import sys
+
 # check Python version is >= 3.5 before we do anything else
 if sys.version_info.major != 3 or sys.version_info.minor < 5:
     print("This script needs Python >= 3.5.  You are running Python %s" % sys.version)
@@ -114,11 +115,10 @@ def cleanup(proxy=None, cannon=None):
     for tunnel_id, tunnel in tunnels.items():
         tunnels[tunnel_id]['route_active'] = False
         tunnels[tunnel_id]['tunnel_active'] = False
-        tunnels[tunnel_id]['link_state_active'] = False
 
     for tunnel_id, tunnel in tunnels.items():
         # Killing ssh tunnel
-        run_sys_cmd("Killing ssh tunnel", True,
+        run_sys_cmd("Killing ssh tunnel (tun%s)" % tunnel_id, True,
                     "kill $(ps -ef | grep ssh | grep %s | awk {'print $2'})" % tunnel['pub_ip'], False)
 
         # Delete local routes
@@ -231,8 +231,7 @@ def rotate_host(targettunnel_id, show_log=True):
     # connect to EC2 (presumably in case it closed since tool launch?)
     rotate_conn = connect_to_ec2()
 
-    if show_log:
-        debug("Rotating IP for: tun%s with IP %s" % (targettunnel_id, tunnels[targettunnel_id]['pub_ip']))
+    success("Rotating IP for: tun%s with IP %s" % (targettunnel_id, tunnels[targettunnel_id]['pub_ip']))
 
     #########################################################################################
     # Identify the instances so we can create routing tables for tear down
@@ -295,29 +294,42 @@ def rotate_host(targettunnel_id, show_log=True):
 
     # wait until no sessions are established
     # Check TCP RX&TX QUEUE
+    check_attempts = 0
     while True:
-        connection_stats = run_sys_cmd('Checking whether the SSH tunnel has any packets queued', True,
-                                       "netstat -ant | grep ESTABLISHED | grep %s | awk {'print $2\":\"$3'}" %
-                                       tunnels[targettunnel_id]['pub_ip'], show_log=show_log)
-        debug("Connection Stats for tun%s are: %s" % (targettunnel_id, str(connection_stats).rstrip()))
-        if str(connection_stats).rstrip() == "00" or str(connection_stats).rstrip() == '':
-            if show_log:
-                debug("Connection is free (tun%s)" % targettunnel_id)
-            break
+        if not exit_threads:
+            connection_stats = run_sys_cmd('Checking whether the SSH tunnel has any packets queued (tun%s)' %
+                                           targettunnel_id, True,
+                                           cmd="netstat -ant | grep ESTABLISHED | grep %s | awk {'print $2\":\"$3'}" %
+                                           tunnels[targettunnel_id]['pub_ip'], show_log=show_log)
+            debug("Connection Stats for tun%s are: %s" % (targettunnel_id, str(connection_stats).rstrip()))
+            if str(connection_stats).rstrip() == "00" or str(connection_stats).rstrip() == '':
+                if show_log:
+                    debug("Connection is free (tun%s)" % targettunnel_id)
+                break
+            else:
+                check_attempts += 1
+                if check_attempts <= 10:
+                    if show_log:
+                        debug(
+                            "Connection is in use, sleeping and trying again in 0.5 seconds (tun%s)" % targettunnel_id)
+                    time.sleep(0.5)
+                else:
+                    warning("Tunnel (tun%s) is still in use and is not becoming free (Queue is: %s)" %
+                            (targettunnel_id, str(connection_stats).rstrip()))
         else:
-            if show_log:
-                debug("Connection is in use, sleeping and trying again in 0.5 seconds (tun%s)" % targettunnel_id)
-            time.sleep(0.5)
+            return
 
     # marking ssh tunnel as inactive
     tunnels[targettunnel_id]['tunnel_active'] = False
     # Killing ssh tunnel
-    run_sys_cmd("Killing ssh tunnel", True, "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
+    run_sys_cmd("Killing ssh tunnel (tun%s)" % targettunnel_id, True,
+                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
                 tunnels[targettunnel_id]['pub_ip'], report_errors=False, show_log=show_log)
 
     # Remove iptables rule allowing SSH to EC2 Host
     run_sys_cmd("Remove iptables rule allowing SSH to EC2 Host", True, localcmdsudoprefix +
-                "iptables -t nat -D POSTROUTING -d %s -j RETURN" % tunnels[targettunnel_id]['pub_ip'], show_log=show_log)
+                "iptables -t nat -D POSTROUTING -d %s -j RETURN" % tunnels[targettunnel_id]['pub_ip'],
+                show_log=show_log)
 
     # Remove NAT outbound traffic going through our tunnels
     run_sys_cmd("Remove NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
@@ -389,7 +401,8 @@ def rotate_host(targettunnel_id, show_log=True):
 
     # Connect to EC2 and get list of instances
     if show_log:
-        debug("Refreshing our local list of instances from the cloud provider to identify new permanent IP (tun%s)" % targettunnel_id)
+        debug("Refreshing our local list of instances from the cloud provider to identify new permanent IP (tun%s)" %
+              targettunnel_id)
     ip_list_instances = rotate_conn.get_only_instances(
         filters={"tag:Name": nameTag, "instance-state-name": "running"})
 
@@ -465,7 +478,8 @@ def rotate_host(targettunnel_id, show_log=True):
 
         # Check if we need the return route re-adding or not
         return_routes = run_sys_cmd("Check if we need the return route re-adding or not", False, sshbasecmd +
-                                    "'ip route list dev tun%s 10.%s.254.2/32'" % (targettunnel_id, targettunnel_id), show_log=show_log)
+                                    "'ip route list dev tun%s 10.%s.254.2/32'" % (targettunnel_id, targettunnel_id),
+                                    show_log=show_log)
         if return_routes == '':
             # Add return route back to us
             run_sys_cmd("Adding return route back to us", False, sshbasecmd +
@@ -503,9 +517,10 @@ def rotate_host(targettunnel_id, show_log=True):
                 # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
             else:
                 if show_log:
-                    debug("Tunnel tun%s is not suitable so not including in route table. (Route %s - Tunnel %s - Link %s)" %
-                          (tunnel_id, str(tunnel['route_active']), str(tunnel['tunnel_active']),
-                           str(tunnel['link_state_active'])))
+                    debug(
+                        "Tunnel tun%s is not suitable so not including in route table. (Route %s - Tunnel %s - Link %s)" %
+                        (tunnel_id, str(tunnel['route_active']), str(tunnel['tunnel_active']),
+                         str(tunnel['link_state_active'])))
 
         run_sys_cmd("Insert custom route (rotate_host)", True, localcmdsudoprefix + nexthopcmd, show_log=show_log)
 
@@ -524,7 +539,9 @@ def rotate_host_thread_handler():
         with futures.ThreadPoolExecutor(num_thread_workers) as rotate_host_executor:
             rotate_host_futures = []
             for tunnel_id, tunnel in tunnels.items():
-                rotate_host_futures.append(rotate_host_executor.submit(rotate_host, targettunnel_id=tunnel_id))
+                if not exit_threads:
+                    rotate_host_futures.append(rotate_host_executor.submit(rotate_host, targettunnel_id=tunnel_id,
+                                                                           show_log=False, ))
 
 
 ########################################################################################################################
@@ -734,7 +751,8 @@ def main():
                     "'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'")
 
         # Restarting Service to take new config (you'd think a simple reload would be enough)
-        run_sys_cmd("Restarting Service to take new config on %s (tun%s)" % (tunnel['pub_ip'], tunnel_id), False, sshbasecmd +
+        run_sys_cmd("Restarting Service to take new config on %s (tun%s)" % (tunnel['pub_ip'], tunnel_id), False,
+                    sshbasecmd +
                     "'sudo service ssh restart'")
 
         # Provision interface
@@ -746,15 +764,18 @@ def main():
                     "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (tunnel_id, tunnel_id))
 
         # Enable forwarding on remote host
-        run_sys_cmd("Enable forwarding on remote host (tun%s)" % tunnel_id, False, sshbasecmd + "'sudo su root -c \"echo 1 > "
-                                                                            "/proc/sys/net/ipv4/ip_forward\"'")
+        run_sys_cmd("Enable forwarding on remote host (tun%s)" % tunnel_id, False,
+                    sshbasecmd + "'sudo su root -c \"echo 1 > "
+                                 "/proc/sys/net/ipv4/ip_forward\"'")
 
         # Provision iptables on remote host
-        run_sys_cmd("Provision iptables on remote host (tun%s)" % tunnel_id, False, sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
-                                                                             "-o eth0 -j MASQUERADE'")
+        run_sys_cmd("Provision iptables on remote host (tun%s)" % tunnel_id, False,
+                    sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
+                                 "-o eth0 -j MASQUERADE'")
 
         # Add return route back to us
-        run_sys_cmd("Add return route back to us (tun%s)" % tunnel_id, False, sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
+        run_sys_cmd("Add return route back to us (tun%s)" % tunnel_id, False,
+                    sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
                     % (tunnel_id, tunnel_id))
 
         # Create tun interface
