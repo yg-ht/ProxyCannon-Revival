@@ -73,16 +73,7 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
     if retcode.returncode != 0 and report_errors:
         error("Failure: %s" % description)
         debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
-#        warning("Continue? y/[N]")
-#        confirm = input()
-#        if confirm.lower() != "y":
-#            warning("Run clean up? y/[N]")
-#            confirm = input()
-#            if confirm.lower() != "y":
-#                exit("Not cleaning, shutting down")
-#            else:
-#                cleanup()
-#                exit("Cleaning complete, shutting down")
+        return retcode.stdout
     else:
         if show_log:
             success("Success: %s" % description)
@@ -305,7 +296,8 @@ def rotate_host(target_tunnel_id, show_log=True):
                        str(tunnels[tunnel_id]['link_state_active']), str(tunnels[tunnel_id]['tunnel_works'])))
     # Install new (reduced) routes
     if routes_available:
-        run_sys_cmd("Installing new multipath route", True, localcmdsudoprefix + nexthopcmd, show_log=show_log)
+        run_sys_cmd("Installing new multipath route (rotate IP for tun%s)" % target_tunnel_id, True,
+                    localcmdsudoprefix + nexthopcmd, show_log=show_log)
     elif exit_threads:
         exit()
     else:
@@ -352,16 +344,17 @@ def rotate_host(target_tunnel_id, show_log=True):
 
     # Remove iptables rule allowing SSH to EC2 Host
     run_sys_cmd("Remove iptables rule allowing SSH to EC2 Host (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
-                "iptables -w 2 -t nat -D POSTROUTING -d %s -j RETURN" % tunnels[target_tunnel_id]['pub_ip'],
+                "iptables -w 10 -t nat -D POSTROUTING -d %s -j RETURN" % tunnels[target_tunnel_id]['pub_ip'],
                 show_log=show_log)
 
     # Remove NAT outbound traffic going through our tunnels
-    run_sys_cmd("Remove NAT outbound traffic going through our tunnels (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
-                "iptables -w 2 -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % target_tunnel_id, show_log=show_log)
+    run_sys_cmd("Remove NAT outbound traffic going through our tunnels (tun%s)" % target_tunnel_id, True,
+                localcmdsudoprefix + "iptables -w 10 -t nat -D POSTROUTING -o tun%s -j MASQUERADE" % target_tunnel_id,
+                show_log=show_log)
 
     # Remove Static Route to EC2 Host
-    run_sys_cmd("Remove Static Route to EC2 Host (tun%s)" % target_tunnel_id, True, localcmdsudoprefix + "ip route del %s" %
-                tunnels[target_tunnel_id]['pub_ip'], show_log=show_log)
+    run_sys_cmd("Remove Static Route to EC2 Host (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
+                "ip route del %s" % tunnels[target_tunnel_id]['pub_ip'], show_log=show_log)
 
     #########################################################################################
     # Reconfigure EC2
@@ -376,7 +369,7 @@ def rotate_host(target_tunnel_id, show_log=True):
 
     # Requesting new IP allocation
     if show_log:
-        debug("Requsting new temporary Elastic IP address... This can take a while (tun%s)" % target_tunnel_id)
+        debug("Requesting new temporary Elastic IP address... This can take a while (tun%s)" % target_tunnel_id)
     temporary_address = None
     try:
         temporary_address = conn.allocate_address()
@@ -461,8 +454,38 @@ def rotate_host(target_tunnel_id, show_log=True):
         sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (homeDir, keyName, swapped_ip)
 
         # Add static routes for new IP to tunnel
-        run_sys_cmd("Add static routes for the new IP address on the SSH tunnel", True, localcmdsudoprefix +
-                    "ip route add %s via %s dev %s" % (swapped_ip, defaultgateway, networkInterface), show_log=show_log)
+        run_sys_cmd("Dummy SSH connection for new ECDSA keys (tun%s)" % target_tunnel_id, False,
+                    sshbasecmd + "'id'", show_log=show_log)
+
+        # Add static routes for new IP to tunnel
+        run_sys_cmd("Add static routes for the new IP address on the SSH tunnel (tun%s)" % target_tunnel_id, True,
+                    localcmdsudoprefix + "ip route add %s via %s dev %s" %
+                    (swapped_ip, defaultgateway, networkInterface), show_log=show_log)
+
+        # Check if we need the tun adapter re-adding or not
+        remote_tun_adaptors = str(run_sys_cmd("Check if we need the tun adapter re-adding or not (tun%s)"
+                                              % target_tunnel_id, False, sshbasecmd + "'ip a show dev tun%s 2>/dev/null'" %
+                                              target_tunnel_id, show_log=show_log)).strip()
+
+        if remote_tun_adaptors == '':
+            # Provision interface
+            run_sys_cmd("Provisioning tun%s interface on %s" % (target_tunnel_id, tunnels[target_tunnel_id]['pub_ip']),
+                        False, sshbasecmd + "'sudo ip tuntap add dev tun%s mode tun'" % target_tunnel_id)
+
+            # Provision remote tun interface
+            run_sys_cmd("Setting IP on remote tun adapter (tun%s)" % target_tunnel_id, False, sshbasecmd +
+                        "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
+                        (target_tunnel_id, target_tunnel_id), show_log=show_log)
+
+        # Check if we need the return route re-adding or not
+        return_routes = run_sys_cmd("Check if we need the return route re-adding or not (tun%s)" % target_tunnel_id,
+                                    False, sshbasecmd + "'ip route list dev tun%s 10.%s.254.2/32'" %
+                                    (target_tunnel_id, target_tunnel_id), show_log=show_log)
+        if return_routes == '':
+            # Add return route back to us
+            run_sys_cmd("Adding return route back to us (tun%s)" % target_tunnel_id, False, sshbasecmd +
+                        "'sudo route add 10.%s.254.2 dev tun%s'" %
+                        (target_tunnel_id, target_tunnel_id), show_log=show_log)
 
         # Establish tunnel
         sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
@@ -491,38 +514,23 @@ def rotate_host(target_tunnel_id, show_log=True):
             if retry_cnt == 5:
                 error("Giving up...")
 
-        # Provision remote tun interface
-        run_sys_cmd("Setting IP on remote tun adapter", False, sshbasecmd +
-                    "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
-                    (target_tunnel_id, target_tunnel_id), show_log=show_log)
-
-        # Check if we need the return route re-adding or not
-        return_routes = run_sys_cmd("Check if we need the return route re-adding or not", False, sshbasecmd +
-                                    "'ip route list dev tun%s 10.%s.254.2/32'" % (target_tunnel_id, target_tunnel_id),
-                                    show_log=show_log)
-        if return_routes == '':
-            # Add return route back to us
-            run_sys_cmd("Adding return route back to us", False, sshbasecmd +
-                        "'sudo route add 10.%s.254.2 dev tun%s'" %
-                        (target_tunnel_id, target_tunnel_id), show_log=show_log)
-
         # Turn up our interface
-        run_sys_cmd("Turn up our interface", True, localcmdsudoprefix +
+        run_sys_cmd("Turn up our interface (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
                     "ifconfig tun%s up" % target_tunnel_id, show_log=show_log)
 
         # Provision interface
-        run_sys_cmd("Provision interface", True, localcmdsudoprefix +
+        run_sys_cmd("Provision interface (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
                     "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (target_tunnel_id,
                                                                             target_tunnel_id), show_log=show_log)
         time.sleep(2)
 
         # Allow local connections to the proxy server
-        run_sys_cmd("Allow connections to our proxy servers", True, localcmdsudoprefix +
-                    "iptables -w 2 -t nat -I POSTROUTING -d %s -j RETURN" % swapped_ip, show_log=show_log)
+        run_sys_cmd("Allow connections to our proxy servers (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
+                    "iptables -w 10 -t nat -I POSTROUTING -d %s -j RETURN" % swapped_ip, show_log=show_log)
 
         # NAT outbound traffic going through our tunnels
-        run_sys_cmd("NAT outbound traffic going through our tunnels", True, localcmdsudoprefix +
-                    "iptables -w 2 -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
+        run_sys_cmd("NAT outbound traffic going through our tunnels (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
+                    "iptables -w 10 -t nat -A POSTROUTING -o tun%s -j MASQUERADE " %
                     target_tunnel_id, show_log=show_log)
 
         # re-enable the route
@@ -542,7 +550,8 @@ def rotate_host(target_tunnel_id, show_log=True):
                           (tunnel_id, str(tunnels[tunnel_id]['route_active']), str(tunnels[tunnel_id]['tunnel_active']),
                           str(tunnels[tunnel_id]['link_state_active']), str(tunnels[tunnel_id]['tunnel_works'])))
 
-        run_sys_cmd("Insert custom route (rotate_host)", True, localcmdsudoprefix + nexthopcmd, show_log=show_log)
+        run_sys_cmd("Insert custom route (rotate_host tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
+                    nexthopcmd, show_log=show_log)
 
         # Mark host ans no longer rotating
         tunnels[target_tunnel_id]['rotating_ip'] = False
@@ -555,7 +564,8 @@ def rotate_host(target_tunnel_id, show_log=True):
 # thread_handler for Rotate Hosts to decouple the process flow and the process logic
 ########################################################################################################################
 def rotate_host_thread_handler():
-    num_thread_workers = floor(args.num_of_instances / 2)
+    rotations_in_progress = 0
+    num_thread_workers = floor(args.num_of_instances / 4)
     if num_thread_workers < 1:
         num_thread_workers = 1
     rotate_hosts_thread_pool = ThreadPool(processes=num_thread_workers)
@@ -565,6 +575,7 @@ def rotate_host_thread_handler():
         for tunnel_id, tunnel in tunnels.items():
             rotate_these_hosts.append(tunnel_id)
         rotate_hosts_thread_pool.map(rotate_host_thread_function, iterable=rotate_these_hosts)
+        rotate_hosts_thread_pool.join()
 
     rotate_hosts_thread_pool.terminate()
     rotate_hosts_thread_pool.close()
