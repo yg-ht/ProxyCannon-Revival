@@ -543,7 +543,7 @@ def rotate_host(target_tunnel_id, show_log=True):
                 tunnels[target_tunnel_id]['tunnel_pid'] = str(ssh_tunnel_pid)
                 tunnels[target_tunnel_id]['tunnel_active'] = True
                 break
-            if retry_cnt == 5:
+            if retry_cnt == 6:
                 error("Giving up...")
 
         # Turn up our interface
@@ -917,7 +917,7 @@ def main():
                 # mark tunnel as active
                 tunnels[tunnel_id]['tunnel_active'] = True
                 break
-            if retry_cnt == 5:
+            if retry_cnt == 6:
                 error("Giving up...")
 
     # setup local forwarding
