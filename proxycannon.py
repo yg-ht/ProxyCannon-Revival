@@ -516,8 +516,11 @@ def rotate_host(target_tunnel_id, show_log=True):
                         "'sudo route add 172.31.%s.2 dev tun%s'" %
                         (target_tunnel_id, target_tunnel_id), show_log=show_log)
         # Establish tunnel
-        sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
-                 "ServerAliveInterval=50 ubuntu@%s &" % (homeDir, keyName, target_tunnel_id, target_tunnel_id, swapped_ip)
+        #sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
+        #         "ServerAliveInterval=50 ubuntu@%s &" % (homeDir, keyName, target_tunnel_id, target_tunnel_id, swapped_ip)
+        sshcmd = "sshuttle --dns -r ubuntu@%s 0/0 -x %s:22 --ssh-cmd 'ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
+                 "ServerAliveInterval=50' &" % (swapped_ip, swapped_ip, homeDir, keyName, target_tunnel_id, target_tunnel_id)
+
         if show_log:
             debug('SHELL CMD (remote): %s (tun%s)' % (sshcmd, target_tunnel_id))
         retry_cnt = 0
@@ -871,13 +874,17 @@ def main():
         run_sys_cmd("Turning up interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
                     "ifconfig tun%s up" % tunnel_id)
         # Provision interface
-        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 172.31." + str(tunnel_id) + ".2", True,
-                    localcmdsudoprefix + "ifconfig tun%s 172.31.%s.2 netmask 255.255.0.0" % (tunnel_id, tunnel_id))
+        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 192.168.229." + str(tunnel_id), True,
+                    localcmdsudoprefix + "ifconfig tun%s 172.31.%s.2 netmask 255.255.255.0" % (tunnel_id, tunnel_id))
         time.sleep(0.5)
         # Establish tunnel interface
-        sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
-                 "ServerAliveInterval=50 ubuntu@%s &" % \
-                 (homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
+        #sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
+        #         "ServerAliveInterval=50 ubuntu@%s &" % \
+        #         (homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
+        sshcmd = "sshuttle --dns -r ubuntu@%s 0/0 -x %s:22 --ssh-cmd " \
+                 "'ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50' &" % \
+                 (tunnels[tunnel_id]['pub_ip'], tunnels[tunnel_id]['pub_ip'], homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
+
         debug("SHELL CMD (remote): " + sshcmd)
         retry_cnt = 0
         while retry_cnt < 6:
