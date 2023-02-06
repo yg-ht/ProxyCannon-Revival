@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # Original Author: Hans Lakhan
-# Current maintainer: Felix Ryan of You Gotta Hack That
-
+# Current maintainers: Felix Ryan of You Gotta Hack That, and Ellroch
 #######################
 import sys
 
@@ -61,6 +60,35 @@ def debug(msg):
 # Run system commands (outside of Python)
 ########################################################################################################################
 def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
+    if islocal:
+        target = 'local'
+    else:
+        target = 'remote'
+    retry_cnt = 0
+    while retry_cnt < 6:
+        if show_log:
+            debug(description)
+        if show_log:
+            debug("SHELL CMD (%s): %s" % (target, cmd))
+        retcode = run(cmd, shell=True, capture_output=True, text=True)
+        if retcode.returncode != 0:
+            if report_errors:
+                error("Failure: %s" % description + " Retrying...")
+                debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
+            retry_cnt = retry_cnt + 1
+            time.sleep(1.3)
+        else:
+            if show_log:
+                success("Success: %s" % description)
+            break
+        if retry_cnt == 6:
+            error("Giving up...")
+    return retcode.stdout
+
+########################################################################################################################
+# Run system commands (outside of Python) -- no retry
+########################################################################################################################
+def run_sys_cmd_nr(description, islocal, cmd, report_errors=True, show_log=True):
     if islocal:
         target = 'local'
     else:
@@ -162,8 +190,9 @@ def cleanup(proxy=None, cannon=None):
             debug("Attempting to terminate instance: %s" % str(instance.id))
             instance.terminate()
 
-        warning("Pausing for 120 seconds so instances can properly terminate.....")
+        warning("Pausing for 2 minutes so instances can properly terminate.....")
         time.sleep(120)
+    print("\n")
     conn.get_all_addresses(filters={"tag:Name": nameTag})
 
     # Detect Elastic IPs and remove them if needed
@@ -285,7 +314,7 @@ def rotate_host(target_tunnel_id, show_log=True):
         if tunnels[tunnel_id]['route_active'] and tunnels[tunnel_id]['tunnel_active'] and \
                 tunnels[tunnel_id]['link_state_active'] and tunnels[tunnel_id]['tunnel_works'] and \
                 not tunnels[tunnel_id]['rotating_ip']:
-            nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
+            nexthopcmd = nexthopcmd + "nexthop via 172.31.%s.2 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
             # As we are using multipath routing and will do route cache-busting elsewhere
             # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
             routes_available = True
@@ -474,19 +503,18 @@ def rotate_host(target_tunnel_id, show_log=True):
 
             # Provision remote tun interface
             run_sys_cmd("Setting IP on remote tun adapter (tun%s)" % target_tunnel_id, False, sshbasecmd +
-                        "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" %
+                        "'sudo ifconfig tun%s 172.31.%s.2 netmask 255.255.0.0'" %
                         (target_tunnel_id, target_tunnel_id), show_log=show_log)
 
         # Check if we need the return route re-adding or not
         return_routes = run_sys_cmd("Check if we need the return route re-adding or not (tun%s)" % target_tunnel_id,
-                                    False, sshbasecmd + "'ip route list dev tun%s 10.%s.254.2/32'" %
+                                    False, sshbasecmd + "'ip route list dev tun%s 172.31.%s.2/16'" %
                                     (target_tunnel_id, target_tunnel_id), show_log=show_log)
         if return_routes == '':
             # Add return route back to us
             run_sys_cmd("Adding return route back to us (tun%s)" % target_tunnel_id, False, sshbasecmd +
-                        "'sudo route add 10.%s.254.2 dev tun%s'" %
+                        "'sudo route add 172.31.%s.2 dev tun%s'" %
                         (target_tunnel_id, target_tunnel_id), show_log=show_log)
-
         # Establish tunnel
         sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
                  "ServerAliveInterval=50 ubuntu@%s &" % (homeDir, keyName, target_tunnel_id, target_tunnel_id, swapped_ip)
@@ -520,9 +548,9 @@ def rotate_host(target_tunnel_id, show_log=True):
 
         # Provision interface
         run_sys_cmd("Provision interface (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
-                    "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (target_tunnel_id,
+                    "ifconfig tun%s 172.31.%s.2 netmask 255.255.0.0" % (target_tunnel_id,
                                                                             target_tunnel_id), show_log=show_log)
-        time.sleep(2)
+        time.sleep(1.3)
 
         # Allow local connections to the proxy server
         run_sys_cmd("Allow connections to our proxy servers (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
@@ -541,7 +569,7 @@ def rotate_host(target_tunnel_id, show_log=True):
             # don't include the host we are tearing down in the multipath routing or any others that have been disabled
             if tunnels[tunnel_id]['route_active'] and tunnels[tunnel_id]['tunnel_active'] and \
                     tunnels[tunnel_id]['link_state_active'] and tunnels[tunnel_id]['tunnel_works']:
-                nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
+                nexthopcmd = nexthopcmd + "nexthop via 172.31.%s.2 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
                 # As we are using multipath routing and will do route cache-busting elsewhere
                 # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
             elif not tunnels[tunnel_id]['rotating_ip']:
@@ -601,7 +629,7 @@ def cache_bust(show_log=True):
         if tunnels[tunnel_id]['tunnel_active'] and tunnels[tunnel_id]['route_active'] \
                 and tunnels[tunnel_id]['link_state_active'] and tunnels[tunnel_id]['tunnel_works']\
                 and not tunnels[tunnel_id]['rotating_ip']:
-            nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight %s " % \
+            nexthopcmd = nexthopcmd + "nexthop via 172.31.%s.2 dev tun%s weight %s " % \
                          (tunnel_id, tunnel_id, random_weights[tunnel_id])
         elif not tunnels[tunnel_id]['rotating_ip']:
             debug("Tunnel tun%s excluded route table (Route %s - Tunnel %s - Link %s - Transmits %s)" %
@@ -611,7 +639,7 @@ def cache_bust(show_log=True):
     # sleep for half a second to help ensure the subsequent cache flush doesn't happen before the route as been applied
     # there is apparent bias in this mechanism for one route over the others and it isn't clear as to what the cause is
     # hoping that it is just a race condition
-    time.sleep(0.5)
+    time.sleep(1)
     run_sys_cmd("Flushing route cache", True, localcmdsudoprefix + 'ip route flush cache', show_log=show_log)
 
 
@@ -622,7 +650,7 @@ def cache_bust_thread_handler():
     # check if the exit flag has been set
     while not exit_threads:
         cache_bust(show_log=False)
-        time.sleep(2)
+        time.sleep(1.2)
 
 
 ########################################################################################################################
@@ -697,9 +725,9 @@ def tunnel_health_monitor_thread_handler():
                         # only include the tunnel that are marked as active in the ECMP routing
                         if tunnels[tunnel_id]['tunnel_active'] and tunnels[tunnel_id]['route_active'] \
                                 and tunnels[tunnel_id]['link_state_active'] and tunnels[tunnel_id]['tunnel_works']:
-                            nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % \
+                            nexthopcmd = nexthopcmd + "nexthop via 172.31.%s.2 dev tun%s weight 1 " % \
                                          (tunnel_id, tunnel_id)
-                    run_sys_cmd("Insert custom route (tunnel_health_monitor)", True,
+                    run_sys_cmd_nr("Insert custom route (tunnel_health_monitor)", True,
                                 localcmdsudoprefix + nexthopcmd, show_log=False)
                     # update is no longer needed so reset the flag
                     update_needed = False
@@ -779,14 +807,14 @@ def main():
         error("There may be config in your AWS console to tidy up but no local changes were made")
         exit()
 
-    warning("Starting %s instances, waiting about 4 minutes for them to fully boot" % args.num_of_instances)
+    warning("Starting %s instances, waiting about 2 minutes for them to fully boot" % args.num_of_instances)
 
-    # sleep for 4 minutes while booting images
+    # sleep for 2 minutes while booting images
     for i in range(21):
         sys.stdout.write('\r')
         sys.stdout.write("[%-20s] %d%%" % ('=' * i, 5 * i))
         sys.stdout.flush()
-        time.sleep(11.5)
+        time.sleep(5.75)
     print("\n")
     # Add tag name to instance for better management
     for instance in reservations.instances:
@@ -805,59 +833,47 @@ def main():
         public_ips = public_ips + instance.ip_address + " "
         tunnel_id += 1
     debug("Public IP's for all instances: %s" % public_ips)
-
     # Create ssh Tunnels for proxying
     success("Provisioning Hosts.....")
     for tunnel_id, tunnel in tunnels.items():
         log(tunnels[tunnel_id]['pub_ip'])
         sshbasecmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no ubuntu@%s " % (
             homeDir, keyName, tunnels[tunnel_id]['pub_ip'])
-
         # Enable Tunneling on the remote host
         run_sys_cmd("Enabling tunneling via SSH on %s (tun%s)" % (tunnels[tunnel_id]['pub_ip'], tunnel_id), False, sshbasecmd +
                     "'echo \"PermitTunnel yes\" | sudo tee -a  /etc/ssh/sshd_config'")
-
         # Restarting Service to take new config (you'd think a simple reload would be enough)
         run_sys_cmd("Restarting Service to take new config on %s (tun%s)" % (tunnels[tunnel_id]['pub_ip'], tunnel_id), False,
                     sshbasecmd +
                     "'sudo service ssh restart'")
-
         # Provision interface
         run_sys_cmd("Provisioning tun%s interface on %s" % (tunnel_id, tunnels[tunnel_id]['pub_ip']), False, sshbasecmd +
                     "'sudo ip tuntap add dev tun%s mode tun'" % tunnel_id)
-
         # Configure interface
         run_sys_cmd("Configuring tun%s interface on %s" % (tunnel_id, tunnels[tunnel_id]['pub_ip']), False, sshbasecmd +
-                    "'sudo ifconfig tun%s 10.%s.254.1 netmask 255.255.255.252'" % (tunnel_id, tunnel_id))
-
+                    "'sudo ifconfig tun%s 172.31.%s.2 netmask 255.255.0.0'" % (tunnel_id, tunnel_id))
         # Enable forwarding on remote host
         run_sys_cmd("Enable forwarding on remote host (tun%s)" % tunnel_id, False,
                     sshbasecmd + "'sudo su root -c \"echo 1 > "
                                  "/proc/sys/net/ipv4/ip_forward\"'")
-
         # Provision iptables on remote host
         run_sys_cmd("Provision iptables on remote host (tun%s)" % tunnel_id, False,
                     sshbasecmd + "'sudo iptables -t nat -A POSTROUTING "
                                  "-o eth0 -j MASQUERADE'")
-
         # Add return route back to us
         run_sys_cmd("Add return route back to us (tun%s)" % tunnel_id, False,
-                    sshbasecmd + "'sudo route add 10.%s.254.2 dev tun%s'"
+                    sshbasecmd + "'sudo route add 172.31.%s.2 dev tun%s'"
                     % (tunnel_id, tunnel_id))
-
         # Create tun interface
         run_sys_cmd("Creating local interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
                     "ip tuntap add dev tun%s mode tun" % str(tunnel_id))
-
         # Turn up our interface
         run_sys_cmd("Turning up interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
                     "ifconfig tun%s up" % tunnel_id)
-
         # Provision interface
-        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 10." + str(tunnel_id) + ".254.2", True,
-                    localcmdsudoprefix + "ifconfig tun%s 10.%s.254.2 netmask 255.255.255.252" % (tunnel_id, tunnel_id))
+        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 172.31." + str(tunnel_id) + ".2", True,
+                    localcmdsudoprefix + "ifconfig tun%s 172.31.%s.2 netmask 255.255.0.0" % (tunnel_id, tunnel_id))
         time.sleep(0.5)
-
         # Establish tunnel interface
         sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
                  "ServerAliveInterval=50 ubuntu@%s &" % \
@@ -902,16 +918,21 @@ def main():
     run_sys_cmd("Flushing all remaining local iptables rules", True, localcmdsudoprefix + "iptables -w 2 -F")
 
     # Allow local connections to RFC1918 (1 of 3)
-    run_sys_cmd("Allowing local connections to RFC1918 (1 of 3)", True, localcmdsudoprefix +
+    run_sys_cmd("Allowing local connections to RFC1918 (1 of 4)", True, localcmdsudoprefix +
                 "iptables -w 2 -t nat -I POSTROUTING -d 192.168.0.0/16 -j RETURN")
 
     # Allow local connections to RFC1918 (2 of 3)
-    run_sys_cmd("Allowing local connections to RFC1918 (2 of 3)", True, localcmdsudoprefix +
+    run_sys_cmd("Allowing local connections to RFC1918 (2 of 4)", True, localcmdsudoprefix +
                 "iptables -w 2 -t nat -I POSTROUTING -d 172.16.0.0/16 -j RETURN")
 
     # Allow local connections to RFC1918 (3 of 3)
-    run_sys_cmd("Allowing local connections to RFC1918 (3 of 3)", True, localcmdsudoprefix +
+    run_sys_cmd("Allowing local connections to RFC1918 (3 of 4)", True, localcmdsudoprefix +
                 "iptables -w 2 -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
+    
+    #Allow local connections to RFC1918 (4 of 4)
+    #--- I ellroch don't know anything about iptables and probably forgot to remove this after i got things working ---
+    run_sys_cmd("Allowing local connections to RFC1918 (4 of 4)", True, localcmdsudoprefix +
+                "iptables -w 2 -t nat -I POSTROUTING -d -6 ::0 -j RETURN")
 
     # do routing and ip tables for each of the tunnel hosts, including build the ECMP route
     nexthopcmd = "ip route replace default scope global "
@@ -922,10 +943,10 @@ def main():
 
         # NAT outbound traffic going through our tunnels
         run_sys_cmd("NAT outbound traffic that goes through our tunnels", True, localcmdsudoprefix +
-                    "iptables -w 2 -t nat -A POSTROUTING -o tun%s -j MASQUERADE " % tunnel_id)
+                    "iptables -w 2 -t nat -A POSTROUTING -o tun%s -j MASQUERADE" % tunnel_id)
 
         # Build ECMP route table command
-        nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
+        nexthopcmd = nexthopcmd + "nexthop via 172.31.%s.2 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
 
         # Mark route as active
         tunnels[tunnel_id]['route_active'] = True
@@ -949,12 +970,12 @@ def main():
 # System and Program Arguments
 ########################################################################################################################
 parser = argparse.ArgumentParser()
-parser.add_argument('-id', '--image-id', nargs='?', default='ami-d05e75b8',
-                    help="Amazon ami image ID.  Example: ami-d05e75b8. If not set, ami-d05e75b8.")
+parser.add_argument('-id', '--image-id', nargs='?', default='ami-02fd6382e5170796b',
+                    help="Amazon ami image ID.  Example: ami-02fd6382e5170796b. If not set, ami-02fd6382e5170796b.")
 parser.add_argument('-t', '--image-type', nargs='?', default='t2.nano',
-                    help="Amazon ami image type Example: t2.nano. If not set, defaults to t2.nano.")
-parser.add_argument('--region', nargs='?', default='us-east-1',
-                    help="Select the region: Example: us-east-1. If not set, defaults to us-east-1.")
+                    help="Amazon ami image type Example: t2.micro. If not set, defaults to t2.nano.")
+parser.add_argument('--region', nargs='?', default='us-east-2',
+                    help="Select the region: Example: us-east-2. If not set, defaults to us-east-2.")
 parser.add_argument('-r', action='store_true', help="Enable Rotating AMI hosts.")
 parser.add_argument('-b', action='store_true', help="Enable multipath cache busting.")
 parser.add_argument('-m', action='store_true', help="Disable the link state monitor thread.")
@@ -1130,4 +1151,4 @@ if __name__ == '__main__':
             for tunnel_id, tunnel in tunnels.items():
                 rotate_host(tunnel_id)
         # the below sleep is just to stop wild things from happening until proper timing control is implemented.
-        time.sleep(5)
+        time.sleep(3)
