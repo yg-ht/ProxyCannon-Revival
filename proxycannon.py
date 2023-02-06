@@ -929,11 +929,6 @@ def main():
     run_sys_cmd("Allowing local connections to RFC1918 (3 of 4)", True, localcmdsudoprefix +
                 "iptables -w 2 -t nat -I POSTROUTING -d 10.0.0.0/8 -j RETURN")
 
-
-
-
-
-
     # do routing and ip tables for each of the tunnel hosts, including build the ECMP route
     nexthopcmd = "ip route replace default scope global "
     for tunnel_id, tunnel in tunnels.items():
@@ -970,8 +965,8 @@ def main():
 # System and Program Arguments
 ########################################################################################################################
 parser = argparse.ArgumentParser()
-parser.add_argument('-id', '--image-id', nargs='?', default='ami-02fd6382e5170796b',
-                    help="Amazon ami image ID.  Example: ami-02fd6382e5170796b. If not set, ami-02fd6382e5170796b.")
+parser.add_argument('-id', '--image-id', nargs='?', default='ami-0650b4d1b221600a5',
+                    help="Amazon ami image ID.  Example: ami-0650b4d1b221600a5. If not set, ami-0650b4d1b221600a5.")
 parser.add_argument('-t', '--image-type', nargs='?', default='t2.nano',
                     help="Amazon ami image type Example: t2.micro. If not set, defaults to t2.nano.")
 parser.add_argument('--region', nargs='?', default='us-east-2',
