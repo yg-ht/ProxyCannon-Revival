@@ -66,7 +66,7 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
     else:
         target = 'remote'
     retry_cnt = 0
-    while retry_cnt < 6:
+    while retry_cnt < 10:
         if show_log:
             debug(description)
         if show_log:
@@ -77,7 +77,7 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
                 error("Failure: %s" % description + " Retrying...")
                 debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
             retry_cnt = retry_cnt + 1
-            time.sleep(1.3)
+            time.sleep(1.5)
         else:
             if show_log:
                 success("Success: %s" % description)
