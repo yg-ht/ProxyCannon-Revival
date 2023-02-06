@@ -143,7 +143,7 @@ def cleanup(proxy=None, cannon=None):
     for tunnel_id, tunnel in tunnels.items():
         # Killing ssh tunnel
         run_sys_cmd("Killing ssh tunnel (tun%s)" % tunnel_id, True,
-                    "kill $(ps -ef | grep ssh | grep %s | awk {'print $2'})" % tunnels[tunnel_id]['pub_ip'], False)
+                    "kill $(ps -ef | grep sshuttle | grep %s | awk {'print $2'})" % tunnels[tunnel_id]['pub_ip'], False)
 
         # Delete local routes
         run_sys_cmd("Delete route %s dev %s" % (tunnels[tunnel_id]['pub_ip'], networkInterface), True, localcmdsudoprefix +
@@ -368,7 +368,7 @@ def rotate_host(target_tunnel_id, show_log=True):
     tunnels[target_tunnel_id]['tunnel_active'] = False
     # Killing ssh tunnel
     run_sys_cmd("Killing ssh tunnel (tun%s)" % target_tunnel_id, True,
-                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
+                "kill $(ps -ef | grep sshuttle | grep %s | awk '{print $2}')" %
                 tunnels[target_tunnel_id]['pub_ip'], report_errors=False, show_log=show_log)
 
     # Remove iptables rule allowing SSH to EC2 Host
