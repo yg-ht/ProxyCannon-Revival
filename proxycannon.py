@@ -65,6 +65,35 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
         target = 'local'
     else:
         target = 'remote'
+    retry_cnt = 0
+    while retry_cnt < 10:
+        if show_log:
+            debug(description)
+        if show_log:
+            debug("SHELL CMD (%s): %s" % (target, cmd))
+        retcode = run(cmd, shell=True, capture_output=True, text=True)
+        if retcode.returncode != 0:
+            if report_errors:
+                error("Failure: %s" % description + " Retrying...")
+                debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
+            retry_cnt = retry_cnt + 1
+            time.sleep(1.5)
+        else:
+            if show_log:
+                success("Success: %s" % description)
+            break
+        if retry_cnt == 6:
+            error("Giving up...")
+    return retcode.stdout
+
+########################################################################################################################
+# Run system commands (outside of Python) -- no retry
+########################################################################################################################
+def run_sys_cmd_nr(description, islocal, cmd, report_errors=True, show_log=True):
+    if islocal:
+        target = 'local'
+    else:
+        target = 'remote'
     if show_log:
         debug(description)
     if show_log:
@@ -77,7 +106,7 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
     else:
         if show_log:
             success("Success: %s" % description)
-        return retcode.stdout
+    return retcode.stdout
 
 
 ########################################################################################################################
@@ -114,7 +143,7 @@ def cleanup(proxy=None, cannon=None):
     for tunnel_id, tunnel in tunnels.items():
         # Killing ssh tunnel
         run_sys_cmd("Killing ssh tunnel (tun%s)" % tunnel_id, True,
-                    "kill $(ps -ef | grep ssh | grep %s | awk {'print $2'})" % tunnels[tunnel_id]['pub_ip'], False)
+                    "kill $(ps -ef | grep sshuttle | grep %s | awk {'print $2'})" % tunnels[tunnel_id]['pub_ip'], False)
 
         # Delete local routes
         run_sys_cmd("Delete route %s dev %s" % (tunnels[tunnel_id]['pub_ip'], networkInterface), True, localcmdsudoprefix +
@@ -339,7 +368,7 @@ def rotate_host(target_tunnel_id, show_log=True):
     tunnels[target_tunnel_id]['tunnel_active'] = False
     # Killing ssh tunnel
     run_sys_cmd("Killing ssh tunnel (tun%s)" % target_tunnel_id, True,
-                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
+                "kill $(ps -ef | grep sshuttle | grep %s | awk '{print $2}')" %
                 tunnels[target_tunnel_id]['pub_ip'], report_errors=False, show_log=show_log)
 
     # Remove iptables rule allowing SSH to EC2 Host
@@ -488,8 +517,11 @@ def rotate_host(target_tunnel_id, show_log=True):
                         (target_tunnel_id, target_tunnel_id), show_log=show_log)
 
         # Establish tunnel
-        sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
-                 "ServerAliveInterval=50 ubuntu@%s &" % (homeDir, keyName, target_tunnel_id, target_tunnel_id, swapped_ip)
+        #sshcmd = "ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
+        #         "ServerAliveInterval=50 ubuntu@%s &" % (homeDir, keyName, target_tunnel_id, target_tunnel_id, swapped_ip)
+        sshcmd = "sshuttle --dns -r ubuntu@%s 0/0 -x %s:22 --ssh-cmd 'ssh -i %s/.ssh/%s.pem -o StrictHostKeyChecking=no -w %s:%s -o TCPKeepAlive=yes -o " \
+                 "ServerAliveInterval=50' &" % (swapped_ip, swapped_ip, homeDir, keyName, target_tunnel_id, target_tunnel_id)
+
         if show_log:
             debug('SHELL CMD (remote): %s (tun%s)' % (sshcmd, target_tunnel_id))
         retry_cnt = 0
@@ -511,7 +543,7 @@ def rotate_host(target_tunnel_id, show_log=True):
                 tunnels[target_tunnel_id]['tunnel_pid'] = str(ssh_tunnel_pid)
                 tunnels[target_tunnel_id]['tunnel_active'] = True
                 break
-            if retry_cnt == 5:
+            if retry_cnt == 6:
                 error("Giving up...")
 
         # Turn up our interface
@@ -779,14 +811,14 @@ def main():
         error("There may be config in your AWS console to tidy up but no local changes were made")
         exit()
 
-    warning("Starting %s instances, waiting about 4 minutes for them to fully boot" % args.num_of_instances)
+    warning("Starting %s instances, waiting about 2 minutes for them to fully boot" % args.num_of_instances)
 
-    # sleep for 4 minutes while booting images
+    # sleep for 2 minutes while booting images
     for i in range(21):
         sys.stdout.write('\r')
         sys.stdout.write("[%-20s] %d%%" % ('=' * i, 5 * i))
         sys.stdout.flush()
-        time.sleep(11.5)
+        time.sleep(5.75)
     print("\n")
     # Add tag name to instance for better management
     for instance in reservations.instances:
@@ -859,9 +891,13 @@ def main():
         time.sleep(0.5)
 
         # Establish tunnel interface
-        sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
-                 "ServerAliveInterval=50 ubuntu@%s &" % \
-                 (homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
+        #sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
+        #         "ServerAliveInterval=50 ubuntu@%s &" % \
+        #         (homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
+        sshcmd = "sshuttle --dns -r ubuntu@%s 0/0 -x %s:22 --ssh-cmd " \
+                 "'ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50' &" \
+                 % (tunnels[tunnel_id]['pub_ip'], tunnels[tunnel_id]['pub_ip'], homeDir, keyName, tunnel_id, tunnel_id)        
+        
         debug("SHELL CMD (remote): " + sshcmd)
         retry_cnt = 0
         while retry_cnt < 6:
@@ -881,7 +917,7 @@ def main():
                 # mark tunnel as active
                 tunnels[tunnel_id]['tunnel_active'] = True
                 break
-            if retry_cnt == 5:
+            if retry_cnt == 6:
                 error("Giving up...")
 
     # setup local forwarding
@@ -949,12 +985,12 @@ def main():
 # System and Program Arguments
 ########################################################################################################################
 parser = argparse.ArgumentParser()
-parser.add_argument('-id', '--image-id', nargs='?', default='ami-d05e75b8',
-                    help="Amazon ami image ID.  Example: ami-d05e75b8. If not set, ami-d05e75b8.")
+parser.add_argument('-id', '--image-id', nargs='?', default='ami-0650b4d1b221600a5',
+                    help="Amazon ami image ID.  Example: ami-0650b4d1b221600a5. If not set, ami-0650b4d1b221600a5.")
 parser.add_argument('-t', '--image-type', nargs='?', default='t2.nano',
                     help="Amazon ami image type Example: t2.nano. If not set, defaults to t2.nano.")
-parser.add_argument('--region', nargs='?', default='us-east-1',
-                    help="Select the region: Example: us-east-1. If not set, defaults to us-east-1.")
+parser.add_argument('--region', nargs='?', default='us-east-2',
+                    help="Select the region: Example: us-east-2. If not set, defaults to us-east-2.")
 parser.add_argument('-r', action='store_true', help="Enable Rotating AMI hosts.")
 parser.add_argument('-b', action='store_true', help="Enable multipath cache busting.")
 parser.add_argument('-m', action='store_true', help="Disable the link state monitor thread.")
@@ -998,6 +1034,9 @@ if not os.path.isfile("/sbin/iptables-restore"):
     exit()
 if not os.path.isfile("/sbin/iptables"):
     error("Could not find /sbin/iptables")
+    exit()
+if not os.path.isfile("/usr/bin/sshuttle"):
+    error("Could not find /usr/bin/sshuttle")
     exit()
 
 # Check args
