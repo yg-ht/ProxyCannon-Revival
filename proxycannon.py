@@ -572,7 +572,7 @@ def rotate_host(target_tunnel_id, show_log=True):
             # don't include the host we are tearing down in the multipath routing or any others that have been disabled
             if tunnels[tunnel_id]['route_active'] and tunnels[tunnel_id]['tunnel_active'] and \
                     tunnels[tunnel_id]['link_state_active'] and tunnels[tunnel_id]['tunnel_works']:
-                nexthopcmd = nexthopcmd + "nexthop via 172.31.%s.2 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
+                nexthopcmd = nexthopcmd + "nexthop via 192.168.%s.2 dev tun%s weight 1 " % (tunnel_id, tunnel_id)
                 # As we are using multipath routing and will do route cache-busting elsewhere
                 # it is (probably?) good enough to do ECMP here (i.e. weight = 1 for all routes)
             elif not tunnels[tunnel_id]['rotating_ip']:
@@ -865,7 +865,7 @@ def main():
                                  "-o eth0 -j MASQUERADE'")
         # Add return route back to us
         run_sys_cmd("Add return route back to us (tun%s)" % tunnel_id, False,
-                    sshbasecmd + "'sudo route add 172.31.%s.2 dev tun%s'"
+                    sshbasecmd + "'sudo route add 192.168.%s.2 dev tun%s'"
                     % (tunnel_id, tunnel_id))
         # Create tun interface
         run_sys_cmd("Creating local interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
@@ -874,16 +874,16 @@ def main():
         run_sys_cmd("Turning up interface tun%s" % str(tunnel_id), True, localcmdsudoprefix +
                     "ifconfig tun%s up" % tunnel_id)
         # Provision interface
-        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 192.168.229." + str(tunnel_id), True,
-                    localcmdsudoprefix + "ifconfig tun%s 172.31.%s.2 netmask 255.255.255.0" % (tunnel_id, tunnel_id))
+        run_sys_cmd("Assigning interface tun" + str(tunnel_id) + " ip of 192.168." + str(tunnel_id) + ".2", True,
+                    localcmdsudoprefix + "ifconfig tun%s 192.168.%s.2 netmask 255.255.0.0" % (tunnel_id, tunnel_id))
         time.sleep(0.5)
         # Establish tunnel interface
-        sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
-                 "ServerAliveInterval=50 ubuntu@%s &" % \
-                 (homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
-        #sshcmd = "sshuttle --dns -r ubuntu@%s 0/0 -x %s:22 --ssh-cmd " \
-        #         "'ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50' &" \
-        #         % (tunnels[tunnel_id]['pub_ip'], tunnels[tunnel_id]['pub_ip'], homeDir, keyName, tunnel_id, tunnel_id)
+        #sshcmd = "ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o " \
+        #         "ServerAliveInterval=50 ubuntu@%s &" % \
+        #         (homeDir, keyName, tunnel_id, tunnel_id, tunnels[tunnel_id]['pub_ip'])
+        sshcmd = "sshuttle --dns -r ubuntu@%s 0/0 -x %s:22 --ssh-cmd " \
+                 "'ssh -i %s/.ssh/%s.pem -w %s:%s -o StrictHostKeyChecking=no -o TCPKeepAlive=yes -o ServerAliveInterval=50' &" \
+                 % (tunnels[tunnel_id]['pub_ip'], tunnels[tunnel_id]['pub_ip'], homeDir, keyName, tunnel_id, tunnel_id)
 
         debug("SHELL CMD (remote): " + sshcmd)
         retry_cnt = 0
