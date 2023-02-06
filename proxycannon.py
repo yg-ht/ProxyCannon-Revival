@@ -65,6 +65,35 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
         target = 'local'
     else:
         target = 'remote'
+    retry_cnt = 0
+    while retry_cnt < 6:
+        if show_log:
+            debug(description)
+        if show_log:
+            debug("SHELL CMD (%s): %s" % (target, cmd))
+        retcode = run(cmd, shell=True, capture_output=True, text=True)
+        if retcode.returncode != 0:
+            if report_errors:
+                error("Failure: %s" % description + " Retrying...")
+                debug("Failed command output is: %s %s" % (str(retcode.stdout), str(retcode.stderr)))
+            retry_cnt = retry_cnt + 1
+            time.sleep(1.3)
+        else:
+            if show_log:
+                success("Success: %s" % description)
+            break
+        if retry_cnt == 6:
+            error("Giving up...")
+    return retcode.stdout
+
+########################################################################################################################
+# Run system commands (outside of Python) -- no retry
+########################################################################################################################
+def run_sys_cmd_nr(description, islocal, cmd, report_errors=True, show_log=True):
+    if islocal:
+        target = 'local'
+    else:
+        target = 'remote'
     if show_log:
         debug(description)
     if show_log:
@@ -77,7 +106,7 @@ def run_sys_cmd(description, islocal, cmd, report_errors=True, show_log=True):
     else:
         if show_log:
             success("Success: %s" % description)
-        return retcode.stdout
+    return retcode.stdout
 
 
 ########################################################################################################################
