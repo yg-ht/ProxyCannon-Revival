@@ -811,14 +811,14 @@ def main():
         error("There may be config in your AWS console to tidy up but no local changes were made")
         exit()
 
-    warning("Starting %s instances, waiting about 4 minutes for them to fully boot" % args.num_of_instances)
+    warning("Starting %s instances, waiting about 2 minutes for them to fully boot" % args.num_of_instances)
 
-    # sleep for 4 minutes while booting images
+    # sleep for 2 minutes while booting images
     for i in range(21):
         sys.stdout.write('\r')
         sys.stdout.write("[%-20s] %d%%" % ('=' * i, 5 * i))
         sys.stdout.flush()
-        time.sleep(11.5)
+        time.sleep(5.75)
     print("\n")
     # Add tag name to instance for better management
     for instance in reservations.instances:
@@ -1034,6 +1034,9 @@ if not os.path.isfile("/sbin/iptables-restore"):
     exit()
 if not os.path.isfile("/sbin/iptables"):
     error("Could not find /sbin/iptables")
+    exit()
+if not os.path.isfile("/usr/bin/sshuttle"):
+    error("Could not find /usr/bin/sshuttle")
     exit()
 
 # Check args
