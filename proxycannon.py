@@ -141,14 +141,11 @@ def cleanup(proxy=None, cannon=None):
         tunnels[tunnel_id]['tunnel_active'] = False
 
     for tunnel_id, tunnel in tunnels.items():
-        # Killing ssh tunnel
-        #run_sys_cmd("Killing ssh tunnel (tun%s)" % tunnel_id, True, localcmdsudoprefix +
-        #            "kill $(ps -ef | grep ssh | grep %s | grep ssh-cmd | awk '{print $2}')" % tunnels[tunnel_id]['pub_ip'], False)
-        #run_sys_cmd("Killing ssh tunnel (tun%s)" % tunnel_id, True, localcmdsudoprefix +
-        #            "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % tunnels[tunnel_id]['pub_ip'], False)
-        ##########
-        #for some reason this command fails every time. gonna let it just figure out the server is dead from the keepalive, or from the destruction of the interface
-        ##########
+        # Killing ssh tunnel --- kill return codes are equal to 128+the signal it was killed by = nonstandard return values... use no_repeat version
+        run_sys_cmd_nr("Killing sshuttle tunnel (tun%s)" % tunnel_id, True, localcmdsudoprefix +
+                    "kill $(ps -ef | grep ssh | grep %s | grep ssh-cmd | awk '{print $2}')" % tunnels[tunnel_id]['pub_ip'], False)
+        run_sys_cmd_nr("Killing ssh tunnel (tun%s)" % tunnel_id, True, localcmdsudoprefix +
+                    "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % tunnels[tunnel_id]['pub_ip'], False)
 
         # Delete local routes
         run_sys_cmd("Delete route %s dev %s" % (tunnels[tunnel_id]['pub_ip'], networkInterface), True, localcmdsudoprefix +
@@ -198,7 +195,12 @@ def cleanup(proxy=None, cannon=None):
             instance.terminate()
 
         warning("Pausing for 4 minutes so instances can properly terminate.....")
-        time.sleep(240)
+    # pause for 4 minutes, show progress 
+    for i in range(21):
+        sys.stdout.write('\r')
+        sys.stdout.write("[%-20s] %d%%" % ('=' * i, 5 * i))
+        sys.stdout.flush()
+        time.sleep(11.5)
     conn.get_all_addresses(filters={"tag:Name": nameTag})
 
     # Detect Elastic IPs and remove them if needed
@@ -372,16 +374,13 @@ def rotate_host(target_tunnel_id, show_log=True):
 
     # marking ssh tunnel as inactive
     tunnels[target_tunnel_id]['tunnel_active'] = False
-    # Killing ssh tunnel
-    #run_sys_cmd("Killing ssh tunnel (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
-    #            "kill $(ps -ef | grep ssh | grep %s | grep ssh-cmd | awk '{print $2}')" %
-    #            tunnels[target_tunnel_id]['pub_ip'], report_errors=True, show_log=show_log)
-    #run_sys_cmd("Killing ssh tunnel (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
-    #            "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
-    #            tunnels[target_tunnel_id]['pub_ip'], report_errors=True, show_log=show_log)
-    ##########
-    #for some reason this command fails every time. gonna let it just figure out the server is dead from the keepalive, or from the destruction of the interface
-    ##########
+    # Killing ssh tunnel --- kill return codes are equal to 128+the signal it was killed by = nonstandard return values... use no_repeat version
+    run_sys_cmd_nr("Killing sshuttle tunnel (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
+                "kill $(ps -ef | grep ssh | grep %s | grep ssh-cmd | awk '{print $2}')" %
+                tunnels[target_tunnel_id]['pub_ip'], report_errors=True, show_log=show_log)
+    run_sys_cmd_nr("Killing ssh tunnel (tun%s)" % target_tunnel_id, True, localcmdsudoprefix +
+                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
+                tunnels[target_tunnel_id]['pub_ip'], report_errors=True, show_log=show_log)
 
 
     # Remove iptables rule allowing SSH to EC2 Host
@@ -673,7 +672,7 @@ def cache_bust_thread_handler():
 ########################################################################################################################
 # Check OS reported state of tunnel
 ########################################################################################################################
-def tunnel_is_up(target_tunnel_id, show_log=True):
+def tunnel_is_up(target_tunnel_id, show_log=False):
     state = run_sys_cmd('Get status of the interface (tun%s)' % target_tunnel_id, True,
                         'cat /sys/class/net/tun%s/operstate' % target_tunnel_id, report_errors=True, show_log=show_log)
     if state.rstrip() == "up":
@@ -685,10 +684,10 @@ def tunnel_is_up(target_tunnel_id, show_log=True):
 ########################################################################################################################
 # Check tunnel actually transmits data to the outside
 ########################################################################################################################
-def tunnel_works(target_tunnel_id, show_log=True):
+def tunnel_works(target_tunnel_id, show_log=False):
     ping_result = run_sys_cmd('Ping a reliable target through tunnel (tun%s)' % target_tunnel_id, True,
                               "ping -I tun%s -c 1 -q 8.8.8.8 | grep 'packet loss' | awk '{print $6}'" %
-                              target_tunnel_id, report_errors=False, show_log=show_log)
+                              target_tunnel_id, report_errors=True, show_log=show_log)
     if ping_result.strip() != '':
         debug('Ping says %s packet loss on tun%s' % (ping_result.strip(), target_tunnel_id))
     if ping_result.strip() == "0%":
@@ -710,7 +709,7 @@ def tunnel_health_monitor_thread_handler():
         for target_tunnel_id in tunnels:
             if not tunnels[target_tunnel_id]['rotating_ip']:
                 # get the tunnel's status
-                target_tunnel_is_up = tunnel_is_up(target_tunnel_id, show_log=True)
+                target_tunnel_is_up = tunnel_is_up(target_tunnel_id, show_log=False)
                 # Do stuff if the link is not happy
                 if target_tunnel_is_up != tunnels[target_tunnel_id]['link_state_active']:
                     tunnels[target_tunnel_id]['link_state_active'] = not tunnels[target_tunnel_id]['link_state_active']
@@ -722,7 +721,7 @@ def tunnel_health_monitor_thread_handler():
                         tunnels[target_tunnel_id]['link_state_active'] = False
                         warning('Tunnel tun%s has been detected as down' % target_tunnel_id)
 
-                target_tunnel_works = tunnel_works(target_tunnel_id, show_log=True)
+                target_tunnel_works = tunnel_works(target_tunnel_id, show_log=False)
                 # Do stuff if the tunnel can't be used to ping
                 if target_tunnel_works != tunnels[target_tunnel_id]['tunnel_works']:
                     tunnels[target_tunnel_id]['tunnel_works'] = not tunnels[target_tunnel_id]['tunnel_works']
@@ -745,7 +744,7 @@ def tunnel_health_monitor_thread_handler():
                             nexthopcmd = nexthopcmd + "nexthop via 10.%s.254.1 dev tun%s weight 1 " % \
                                          (tunnel_id, tunnel_id)
                     run_sys_cmd_nr("Insert custom route (tunnel_health_monitor)", True,
-                                localcmdsudoprefix + nexthopcmd, show_log=True)
+                                localcmdsudoprefix + nexthopcmd, show_log=False)
                     # update is no longer needed so reset the flag
                     update_needed = False
 
@@ -824,14 +823,14 @@ def main():
         error("There may be config in your AWS console to tidy up but no local changes were made")
         exit()
 
-    warning("Starting %s instances, waiting about 2 minutes for them to fully boot" % args.num_of_instances)
+    warning("Starting %s instances, waiting about 4 minutes for them to fully boot" % args.num_of_instances)
 
-    # sleep for 2 minutes while booting images
+    # sleep for 4 minutes while booting images
     for i in range(21):
         sys.stdout.write('\r')
         sys.stdout.write("[%-20s] %d%%" % ('=' * i, 5 * i))
         sys.stdout.flush()
-        time.sleep(5.75)
+        time.sleep(11.5)
     print("\n")
     # Add tag name to instance for better management
     for instance in reservations.instances:
@@ -851,7 +850,7 @@ def main():
         tunnel_id += 1
     debug("Public IP's for all instances: %s" % public_ips)
 
-    # Save iptables
+    # Save iptables normal configuration file for later restoration
     run_sys_cmd("Saving the current local IP tables state", True, localcmdsudoprefix +
                 "/sbin/iptables-save > /tmp/%s" % iptablesName)
 
@@ -940,10 +939,6 @@ def main():
     # setup local forwarding
     run_sys_cmd("Enabling local ip forwarding (IPv4)", True, "echo 1 | " + localcmdsudoprefix +
                 "tee -a /proc/sys/net/ipv4/ip_forward")
-
-    # Save iptables ----- moved above "create ssh tables for proxying" since sshuttle alters the tables
-    #run_sys_cmd("Saving the current local IP tables state", True, localcmdsudoprefix +
-    #            "/sbin/iptables-save > /tmp/%s" % iptablesName)
 
     # Flush existing rules (1 of 3)
     run_sys_cmd("Flushing existing local iptables nat rules", True, localcmdsudoprefix + "iptables -w 2 -t nat -F")
