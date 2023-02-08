@@ -1,2 +1,3 @@
 boto~=2.49.0
 netifaces~=0.10.9
+sshuttle~=1.1.1

@@ -32,7 +32,7 @@ num_of_instances, The number of instances you'd like to launch.
 
 ### Debian-based systems
 
-```apt install python3-boto python3-netifaces ```
+```apt install python3-boto python3-netifaces sshuttle ```
 
 ### For those who prefer Pip
 
