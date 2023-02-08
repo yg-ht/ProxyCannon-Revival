@@ -143,7 +143,7 @@ def cleanup(proxy=None, cannon=None):
     for tunnel_id, tunnel in tunnels.items():
         # Killing ssh tunnel
         run_sys_cmd("Killing ssh tunnel (tun%s)" % tunnel_id, True,
-                    "kill $(ps -ef | grep sshuttle | grep %s | awk {'print $2'})" % tunnels[tunnel_id]['pub_ip'], False)
+                    "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" % tunnels[tunnel_id]['pub_ip'], False)
 
         # Delete local routes
         run_sys_cmd("Delete route %s dev %s" % (tunnels[tunnel_id]['pub_ip'], networkInterface), True, localcmdsudoprefix +
@@ -182,6 +182,7 @@ def cleanup(proxy=None, cannon=None):
     ####################################################################################################################
 
     debug("Getting objects ready for termination at the cloud")
+    
     cleanup_instances = conn.get_only_instances(
         filters={"tag:Name": nameTag, "instance-state-name": "running"})
     if cleanup_instances:
@@ -344,7 +345,7 @@ def rotate_host(target_tunnel_id, show_log=True):
         if not exit_threads:
             connection_stats = run_sys_cmd('Checking whether the SSH tunnel has any packets queued (tun%s)' %
                                            target_tunnel_id, True,
-                                           cmd="netstat -ant | grep ESTABLISHED | grep %s | awk {'print $2\":\"$3'}" %
+                                           cmd="netstat -ant | grep ESTABLISHED | grep %s | awk '{print $2\":\"$3}'" %
                                            tunnels[target_tunnel_id]['pub_ip'], show_log=show_log)
             debug("Connection Stats for tun%s are: %s" % (target_tunnel_id, str(connection_stats).rstrip()))
             if str(connection_stats).rstrip() == "0:0" or str(connection_stats).rstrip() == '':
@@ -368,7 +369,7 @@ def rotate_host(target_tunnel_id, show_log=True):
     tunnels[target_tunnel_id]['tunnel_active'] = False
     # Killing ssh tunnel
     run_sys_cmd("Killing ssh tunnel (tun%s)" % target_tunnel_id, True,
-                "kill $(ps -ef | grep sshuttle | grep %s | awk '{print $2}')" %
+                "kill $(ps -ef | grep ssh | grep %s | awk '{print $2}')" %
                 tunnels[target_tunnel_id]['pub_ip'], report_errors=False, show_log=show_log)
 
     # Remove iptables rule allowing SSH to EC2 Host
@@ -534,7 +535,7 @@ def rotate_host(target_tunnel_id, show_log=True):
                 time.sleep(1 + int(retry_cnt))
             else:
                 ssh_tunnel_pid = run_sys_cmd('Getting PID of newly created SSH tunnel (tun%s)' % target_tunnel_id, True,
-                                             localcmdsudoprefix + "ps -ef | grep ssh | grep %s | awk {'print $2'}" %
+                                             localcmdsudoprefix + "ps -ef | grep ssh | grep %s | awk '{print $2}'" %
                                              swapped_ip, show_log=show_log).split()[0]
                 # add pid entry to table
                 # 'tunnel_pid': None
@@ -674,7 +675,7 @@ def tunnel_is_up(target_tunnel_id, show_log=False):
 ########################################################################################################################
 def tunnel_works(target_tunnel_id, show_log=False):
     ping_result = run_sys_cmd('Ping a reliable target through tunnel (tun%s)' % target_tunnel_id, True,
-                              "ping -I tun%s -c 1 -q 8.8.8.8 | grep 'packet loss' | awk {'print $6'}" %
+                              "ping -I tun%s -c 1 -q 8.8.8.8 | grep 'packet loss' | awk '{print $6}'" %
                               target_tunnel_id, report_errors=False, show_log=show_log)
     if ping_result.strip() != '':
         debug('Ping says %s packet loss on tun%s' % (ping_result.strip(), target_tunnel_id))
@@ -908,7 +909,7 @@ def main():
                 time.sleep(1)
             else:
                 ssh_tunnel_pid = run_sys_cmd('Getting PID of newly created SSH tunnel', True, localcmdsudoprefix +
-                                             "ps -ef | grep ssh | grep %s | awk {'print $2'}" %
+                                             "ps -ef | grep ssh | grep %s | awk '{print $2}'" %
                                              tunnels[tunnel_id]['pub_ip']).split()[0]
                 # add pid entry to table
                 # 'tunnel_pid': None
@@ -1035,9 +1036,6 @@ if not os.path.isfile("/sbin/iptables-restore"):
 if not os.path.isfile("/sbin/iptables"):
     error("Could not find /sbin/iptables")
     exit()
-if not os.path.isfile("/usr/bin/sshuttle"):
-    error("Could not find /usr/bin/sshuttle")
-    exit()
 
 # Check args
 debug("Checking for minimum num of args")
@@ -1127,7 +1125,7 @@ else:
     exit()
 
 # Resolve EC2 control panel to IP
-ec2_ip = str(run_sys_cmd("Resolve EC2 control panel to IP", True, "host ec2.amazonaws.com 8.8.8.8 | awk {'print $4'}")).strip()
+ec2_ip = str(run_sys_cmd("Resolve EC2 control panel to IP", True, "host ec2.amazonaws.com 8.8.8.8 | awk '{print $4}'")).strip()
 run_sys_cmd('Add a static hosts definition into /etc/hosts so that EC2 control will always be where we need it', True,
             localcmdsudoprefix + 'echo "%s ec2.amazonaws.com" | sudo tee -a /etc/hosts' % ec2_ip)
 
