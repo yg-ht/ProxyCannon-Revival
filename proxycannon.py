@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Original Author: Hans Lakhan
-# Current maintainer: Felix Ryan of You Gotta Hack That
+# Current maintainers: Felix Ryan of You Gotta Hack That, and Ellroch of OGLLC
 
 #######################
 import sys
