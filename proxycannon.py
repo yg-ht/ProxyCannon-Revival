@@ -997,8 +997,8 @@ def main():
 # System and Program Arguments
 ########################################################################################################################
 parser = argparse.ArgumentParser()
-parser.add_argument('-id', '--image-id', nargs='?', default='ami-0650b4d1b221600a5',
-                    help="Amazon ami image ID.  Example: ami-0650b4d1b221600a5. If not set, ami-0650b4d1b221600a5.")
+parser.add_argument('-id', '--image-id', nargs='?', default='ami-0ccd41bf9f4fafa80',
+                    help="Amazon ami image ID.  Example: ami-0ccd41bf9f4fafa80. If not set, ami-0ccd41bf9f4fafa80.")
 parser.add_argument('-t', '--image-type', nargs='?', default='t2.nano',
                     help="Amazon ami image type Example: t2.nano. If not set, defaults to t2.nano.")
 parser.add_argument('--region', nargs='?', default='us-east-2',
